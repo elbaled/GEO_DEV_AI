@@ -1,14 +1,13 @@
 /* ============================================================================
-   GeoDev Survey & GIS Excel Workstation (V3.0 PRO)
-   - لوحة CAD تفاعلية بالكامل (Zoom In / Zoom Out / Pan باللمس والماوس + أزرار تحكم)
-   - تنظيف تلقائي لسطور العناوين الزائدة عند الاستيراد
-   - تصدير Excel نظيف يبدأ من أول نقطة مباشرة (PENZ / PNZ بدون سطور عناوين)
-   - تكامل كامل مع AutoCAD DXF, Civil 3D, Surfer, ArcGIS Pro, QGIS, Sokkia SDR/CDR, Leica GSI
+   GeoDev Survey & GIS Excel Workstation (V4.0 - Guest Preview + Auth Gate)
+   - متاحة للتجربة للزوار قبل تسجيل الدخول (رفع الملفات + معاينة لوحة CAD التفاعلية)
+   - عند محاولة التصدير/الحفظ أو تنفيذ أوامر AI بدون حساب: تظهر نافذة إنشاء حساب / تسجيل دخول
+   - بعد تسجيل الدخول: تعمل بكامل الصلاحيات داخل قسم "المساحة"
    ============================================================================ */
 (function () {
   "use strict";
-  if (window.GeoDevAIExcelV3Init) return;
-  window.GeoDevAIExcelV3Init = true;
+  if (window.GeoDevAIExcelV4Init) return;
+  window.GeoDevAIExcelV4Init = true;
 
   function ensureSheetJS(callback) {
     if (window.XLSX) {
@@ -36,6 +35,7 @@
   let showLabelsOnCanvas = true;
   let connectLinesOnCanvas = true;
   let searchFilter = "";
+  let isLoggedInUser = false;
 
   // متغيرات التحكم التفاعلي في شاشة الكاد (Zoom & Pan)
   let cadZoom = 1;
@@ -46,6 +46,15 @@
   let dragStartY = 0;
   let initialPinchDist = 0;
   let initialPinchZoom = 1;
+
+  function checkAuthState() {
+    try {
+      if (window.firebase && firebase.apps && firebase.apps.length && firebase.auth().currentUser) {
+        return true;
+      }
+    } catch (_) {}
+    return isLoggedInUser;
+  }
 
   function resetCadView() {
     cadZoom = 1;
@@ -88,6 +97,73 @@
     box.textContent = msg;
   }
 
+  /* ============================================================================
+     نافذة تنبيه تسجيل الدخول / إنشاء حساب عند محاولة الحفظ أو استخدام AI للزوار
+     ============================================================================ */
+  function openAuthRequiredModal(actionLabel = "حفظ وتصدير الملفات واستخدام أوامر الذكاء الاصطناعي") {
+    const oldModal = document.getElementById("gdExcelAuthGateModal");
+    if (oldModal) oldModal.remove();
+
+    const overlay = document.createElement("div");
+    overlay.id = "gdExcelAuthGateModal";
+    overlay.style.cssText = `
+      position: fixed; inset: 0; z-index: 999999;
+      background: rgba(10, 9, 8, 0.86); backdrop-filter: blur(6px);
+      display: flex; align-items: center; justify-content: center;
+      padding: 16px; direction: rtl; font-family: inherit;
+    `;
+
+    overlay.innerHTML = `
+      <div style="width:100%;max-width:430px;background:#1c1917;border:2px solid #e09f24;border-radius:20px;padding:22px;color:#f5f5f4;text-align:center;box-shadow:0 24px 60px rgba(0,0,0,0.75);">
+        <div style="width:54px;height:54px;margin:0 auto 12px;border-radius:16px;background:rgba(224,159,36,0.16);border:1.5px solid #e09f24;display:grid;place-items:center;font-size:26px;">
+          🔐
+        </div>
+        <h3 style="margin:0 0 8px;font-size:18px;font-weight:900;color:#fbbf24;">
+          أنشئ حساباً أو سجّل الدخول للمتابعة
+        </h3>
+        <p style="margin:0 0 16px;font-size:13px;color:#d6d3d1;line-height:1.75;">
+          لقد قمت بمعاينة بياناتك بنجاح! لكي تتمكن من <b>${actionLabel}</b> على منصة <b>GeoDev</b>، يرجى إنشاء حساب مجاني أو تسجيل الدخول الآن:
+        </p>
+        <div style="display:flex;flex-direction:column;gap:9px;">
+          <button type="button" id="gdGoToLoginFromExcelBtn"
+            style="width:100%;padding:13px;border-radius:12px;border:0;background:linear-gradient(135deg,#e09f24,#b45309);color:#141210;font-size:14.5px;font-weight:900;cursor:pointer;font-family:inherit;">
+            🚀 إنشاء حساب مجاني / تسجيل الدخول الآن
+          </button>
+          <button type="button" id="gdStayGuestPreviewBtn"
+            style="width:100%;padding:10px;border-radius:11px;border:1px solid #44403c;background:#292524;color:#a8a29e;font-size:12.5px;font-weight:800;cursor:pointer;font-family:inherit;">
+            متابعة المعاينة كزائر فقط
+          </button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    const closeModal = () => overlay.remove();
+    document.getElementById("gdStayGuestPreviewBtn").onclick = closeModal;
+    overlay.addEventListener("click", e => {
+      if (e.target === overlay) closeModal();
+    });
+
+    document.getElementById("gdGoToLoginFromExcelBtn").onclick = () => {
+      closeModal();
+      // التمرير إلى نموذج تسجيل الدخول في الصفحة أو فتح نافذة الدخول
+      const authContainer =
+        document.getElementById("authScreen") ||
+        document.getElementById("loginScreen") ||
+        document.getElementById("authBox") ||
+        document.querySelector(".auth-card, .login-card, #s-account, form");
+
+      if (authContainer) {
+        authContainer.scrollIntoView({ behavior: "smooth", block: "center" });
+        const emailInput = authContainer.querySelector('input[type="email"], input[type="text"]');
+        if (emailInput) setTimeout(() => emailInput.focus(), 400);
+      } else {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+    };
+  }
+
   function injectStyles() {
     const old = document.getElementById("gdAiExcelStyles");
     if (old) old.remove();
@@ -95,6 +171,33 @@
     const style = document.createElement("style");
     style.id = "gdAiExcelStyles";
     style.textContent = `
+      #gdGuestWelcomeBanner {
+        direction: rtl;
+        text-align: right;
+        background: linear-gradient(135deg, #1c1917, #292524);
+        border: 1.5px solid #e09f24;
+        border-radius: 16px;
+        padding: 13px 16px;
+        margin: 12px auto;
+        max-width: 980px;
+        color: #f5f5f4;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 10px;
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+      }
+      #gdGuestWelcomeBanner strong {
+        color: #fbbf24;
+        font-size: 14px;
+        display: block;
+      }
+      #gdGuestWelcomeBanner span {
+        font-size: 12px;
+        color: #d6d3d1;
+      }
+
       #gdAiExcelStudio {
         direction: rtl;
         text-align: right;
@@ -102,7 +205,8 @@
         border: 2px solid #e09f24;
         border-radius: 20px;
         padding: 16px;
-        margin: 18px 0;
+        margin: 14px auto 18px;
+        max-width: 980px;
         color: #f5f5f4;
         box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5);
       }
@@ -118,7 +222,7 @@
       }
       .gd-ex-top-bar h3 {
         margin: 0;
-        font-size: 18.5px;
+        font-size: 18px;
         font-weight: 900;
         color: #fbbf24;
       }
@@ -300,7 +404,7 @@
 
       /* الجدول التفاعلي */
       .gd-ex-grid-wrap {
-        max-height: 320px;
+        max-height: 300px;
         overflow: auto;
         border: 1.5px solid #44403c;
         border-radius: 12px;
@@ -475,20 +579,22 @@
   }
 
   function renderStudioHTML() {
+    const logged = checkAuthState();
+
     return `
       <div class="gd-ex-top-bar">
         <div>
           <h3>📊 محطة إكسيل المساحة ونظم المعلومات الجغرافية (AI Survey Excel)</h3>
-          <p>استيراد وتصدير مباشر مع Excel، AutoCAD DXF، Surfer، ArcGIS Pro، QGIS، وأجهزة التوتال ستيشن</p>
+          <p>ارفع ملف الإكسيل أو لوحة الأوتوكاد (DXF) أو التوتال ستيشن وعاين الرسمة فوراً — وسجّل الدخول لحفظ وتصدير الملفات</p>
         </div>
-        <span class="gd-ex-pro-pill">WORKSTATION PRO</span>
+        <span class="gd-ex-pro-pill">${logged ? "WORKSTATION PRO" : "معاينة مجانية للزوار"}</span>
       </div>
 
       <!-- شريط أوامر الذكاء الاصطناعي -->
       <div class="gd-ex-ai-panel">
         <div class="gd-ex-ai-row">
           <input type="text" id="gdExcelAiPrompt" class="gd-ex-input"
-            placeholder="اكتب أمرك بالعربي: اجمع 0.50 على Z | احسب المساحة | احسب المسافة والانحراف | بدل الشرق والشمال...">
+            placeholder="اكتب أمرك بالعربي: اجمع 0.50 على Z | احسب المساحة | احسب المسافة والانحراف | احفظ الملف...">
           <button type="button" id="gdExcelAiExecBtn" class="gd-ex-ai-btn">⚡ تنفيذ بالـ AI</button>
         </div>
         <div class="gd-ex-chips">
@@ -499,13 +605,17 @@
           <button type="button" class="gd-ex-chip" data-ai-cmd="احذف النقاط المكررة">🧹 حذف المكرر</button>
           <button type="button" class="gd-ex-chip" data-ai-cmd="اعيد ترقيم النقاط 1 2 3">🔢 إعادة ترقيم P</button>
         </div>
-        <div id="gdExcelAiLog">جاهز لاستيراد ملفات (XLSX, DXF, SDR, CDR, GSI, CSV) أو تصديرها مباشرة للأوتوكاد و Excel و ArcGIS Pro.</div>
+        <div id="gdExcelAiLog">
+          ${logged
+            ? "جاهز لاستيراد ملفات (XLSX, DXF, SDR, CDR, GSI, CSV) أو تصديرها مباشرة للأوتوكاد و Excel و ArcGIS Pro."
+            : "وضع الزائر مفعّل: يمكنك رفع ملفات (Excel / DXF / CSV / SDR) ومعاينة الرسمة في لوحة الأوتوكاد مجاناً. سجّل الدخول للحفظ واستخدام AI."}
+        </div>
       </div>
 
       <!-- شريط الاستيراد الموحد -->
       <div class="gd-ex-toolbar">
         <label class="gd-ex-btn gold" style="cursor:pointer;">
-          📂 استيراد ملف (Excel / DXF / SDR / CDR / GSI / CSV)
+          📂 رفع ملف من الجهاز (Excel / DXF / CSV / SDR / GSI)
           <input type="file" id="gdExcelFileInput" accept=".xlsx,.xls,.csv,.txt,.dxf,.sdr,.cdr,.gsi" style="display:none;">
         </label>
         <button type="button" class="gd-ex-btn" id="gdExAddRowBtn">➕ نقطة جديدة</button>
@@ -530,7 +640,7 @@
         </p>
         <textarea id="gdAcadListPasteArea" class="gd-ex-textarea" placeholder="at point  X= 312450.120  Y= 3110210.450  Z= 24.510&#10;at point  X= 312475.840  Y= 3110225.180  Z= 24.680"></textarea>
         <button type="button" class="gd-ex-btn gold" id="gdParseAcadListBtn" style="width:100%;justify-content:center;">
-          ⚡ استخراج الإحداثيات وإضافتها لجدول الإكسيل الآن
+          ⚡ استخراج الإحداثيات ومعاينتها في لوحة الكاد
         </button>
       </div>
 
@@ -591,19 +701,19 @@
       </div>
 
       <!-- قسم تصدير Excel نظيف بدون عناوين -->
-      <div class="gd-ex-export-section-title">📗 تصدير ملفات Excel نظيفة (تبدأ من النقطة رقم 1 مباشرة بدون سطور عناوين):</div>
+      <div class="gd-ex-export-section-title">📗 حفظ وتصدير ملفات Excel نظيفة (تبدأ من النقطة رقم 1 مباشرة):</div>
       <div class="gd-ex-export-grid">
         <button type="button" class="gd-ex-exp-btn" data-export-fmt="xlsx_penzd" style="border-color:#22c55e;">
-          📗 Excel نظيف (P, E, N, Z, Code)
-          <small>يبدأ من النقطة 1 مباشرة بدون عناوين</small>
+          📗 حفظ Excel (P, E, N, Z, Code)
+          <small>${logged ? "جاهز للتحميل المباشر" : "🔒 يتطلب تسجيل الدخول"}</small>
         </button>
         <button type="button" class="gd-ex-exp-btn" data-export-fmt="xlsx_pnz" style="border-color:#10b981;">
-          📗 Excel نظيف (P, N, Z)
-          <small>يبدأ من النقطة 1 مباشرة بدون عناوين</small>
+          📗 حفظ Excel (P, N, Z)
+          <small>${logged ? "جاهز للتحميل المباشر" : "🔒 يتطلب تسجيل الدخول"}</small>
         </button>
         <button type="button" class="gd-ex-exp-btn" data-export-fmt="xlsx_pnez" style="border-color:#14b8a6;">
-          📗 Excel نظيف (P, N, E, Z)
-          <small>يبدأ من النقطة 1 مباشرة بدون عناوين</small>
+          📗 حفظ Excel (P, N, E, Z)
+          <small>${logged ? "جاهز للتحميل المباشر" : "🔒 يتطلب تسجيل الدخول"}</small>
         </button>
       </div>
 
@@ -612,19 +722,19 @@
       <div class="gd-ex-export-grid">
         <button type="button" class="gd-ex-exp-btn" data-export-fmt="dxf" style="border-color:#ef4444;">
           📕 لوحة AutoCAD (.dxf)
-          <small>تفتح مباشرة في AutoCAD بطبقات</small>
+          <small>${logged ? "تفتح مباشرة في AutoCAD" : "🔒 يتطلب تسجيل الدخول"}</small>
         </button>
         <button type="button" class="gd-ex-exp-btn" data-export-fmt="csv" style="border-color:#38bdf8;">
           📘 Civil 3D (.csv)
-          <small>صيغة PENZD بدون عناوين</small>
+          <small>${logged ? "صيغة PENZD جاهزة" : "🔒 يتطلب تسجيل الدخول"}</small>
         </button>
         <button type="button" class="gd-ex-exp-btn" data-export-fmt="surfer" style="border-color:#f59e0b;">
           🏔️ برنامج Surfer (.dat)
-          <small>XYZ جاهز للكنتور والكميات</small>
+          <small>${logged ? "XYZ جاهز للكنتور" : "🔒 يتطلب تسجيل الدخول"}</small>
         </button>
         <button type="button" class="gd-ex-exp-btn" data-export-fmt="lsp" style="border-color:#a855f7;">
           ⚡ AutoCAD LISP (.lsp)
-          <small>أمر GD_PLOT_PTS</small>
+          <small>${logged ? "أمر GD_PLOT_PTS" : "🔒 يتطلب تسجيل الدخول"}</small>
         </button>
       </div>
 
@@ -633,23 +743,23 @@
       <div class="gd-ex-export-grid">
         <button type="button" class="gd-ex-exp-btn" data-export-fmt="geojson" style="border-color:#10b981;">
           🗺️ ArcGIS Pro / QGIS (.geojson)
-          <small>طبقة جغرافية ثلاثية الأبعاد</small>
+          <small>${logged ? "طبقة جغرافية 3D" : "🔒 يتطلب تسجيل الدخول"}</small>
         </button>
         <button type="button" class="gd-ex-exp-btn" data-export-fmt="wkt" style="border-color:#06b6d4;">
           📊 ArcGIS Pro WKT (.csv)
-          <small>جدول بحقل POINT Z جاهز</small>
+          <small>${logged ? "حقل POINT Z جاهز" : "🔒 يتطلب تسجيل الدخول"}</small>
         </button>
         <button type="button" class="gd-ex-exp-btn" data-export-fmt="kml" style="border-color:#f97316;">
           🛰️ Google Earth (.kml)
-          <small>عرض النقاط على القمر الصناعي</small>
+          <small>${logged ? "عرض على القمر الصناعي" : "🔒 يتطلب تسجيل الدخول"}</small>
         </button>
         <button type="button" class="gd-ex-exp-btn" data-export-fmt="sdr" style="border-color:#eab308;">
           📡 Sokkia SDR / CDR (.sdr)
-          <small>للتوتال ستيشن (التوقيع)</small>
+          <small>${logged ? "للتوتال ستيشن (التوقيع)" : "🔒 يتطلب تسجيل الدخول"}</small>
         </button>
         <button type="button" class="gd-ex-exp-btn" data-export-fmt="gsi" style="border-color:#84cc16;">
           📡 Leica GSI (.gsi)
-          <small>ملف جهاز لايكا جاهز</small>
+          <small>${logged ? "ملف جهاز لايكا جاهز" : "🔒 يتطلب تسجيل الدخول"}</small>
         </button>
       </div>
     `;
@@ -741,7 +851,7 @@
   }
 
   /* ============================================================================
-     استيراد الملفات مع التنظيف التلقائي لسطور العناوين النصية الزائدة
+     استيراد الملفات (متاح مجاناً للزوار والأعضاء لمعاينة الرسمة)
      ============================================================================ */
   function parseDxfContent(dxfText) {
     const lines = dxfText.split(/\r?\n/).map(l => l.trim());
@@ -816,7 +926,6 @@
             const aoa = window.XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
             if (!aoa.length) return showExcelLog("ملف الإكسيل فارغ.", "error");
 
-            // تصفية سطور العناوين النصية الزائدة في أعلى الملف والبدء من أول سطر إحداثيات رقمي
             const dataRows = aoa.filter(r => {
               if (!Array.isArray(r) || r.length < 3) return false;
               const v1 = parseFloat(r[1]);
@@ -843,7 +952,7 @@
 
             resetCadView();
             renderExcelTable();
-            showExcelLog(`📗 تم استيراد ${rows.length} نقطة نظيفة من ملف Excel (${file.name}) وحذف سطور العناوين الزائدة تلقائياً!`, "success");
+            showExcelLog(`📗 تم رفع ${rows.length} نقطة من (${file.name}) وعرض الرسمة في لوحة الكاد!`, "success");
           } catch (err) {
             showExcelLog("خطأ في قراءة Excel: " + err.message, "error");
           }
@@ -859,12 +968,12 @@
 
       if (ext === "dxf") {
         const pts = parseDxfContent(text);
-        if (!pts.length) return showExcelLog("لم يتم العثور على عناصر POINT أو POLYLINE داخل ملف DXF.", "error");
+        if (!pts.length) return showExcelLog("لم يتم العثور على نقاط داخل ملف DXF.", "error");
         columns = ["P", "E", "N", "Z", "Code"];
         rows = pts;
         resetCadView();
         renderExcelTable();
-        showExcelLog(`📐 تم استيراد ${rows.length} نقطة مباشرة من لوحة AutoCAD DXF (${file.name})!`, "success");
+        showExcelLog(`📐 تم رفع ${rows.length} نقطة من لوحة AutoCAD DXF (${file.name}) وعرضها على الشاشة!`, "success");
         return;
       }
 
@@ -890,7 +999,7 @@
           rows = parsed;
           resetCadView();
           renderExcelTable();
-          showExcelLog(`📡 تم استيراد وتحويل ${rows.length} نقطة من ملف التوتال ستيشن (${file.name})!`, "success");
+          showExcelLog(`📡 تم رفع ${rows.length} نقطة من ملف التوتال ستيشن (${file.name}) وعرض الرسمة!`, "success");
           return;
         }
       }
@@ -917,12 +1026,11 @@
           rows = parsed;
           resetCadView();
           renderExcelTable();
-          showExcelLog(`📡 تم استيراد ${rows.length} نقطة من ملف Leica GSI!`, "success");
+          showExcelLog(`📡 تم رفع ${rows.length} نقطة من ملف Leica GSI وعرضها!`, "success");
           return;
         }
       }
 
-      // CSV / TXT عام مع تجاهل سطور العناوين غير الرقمية
       const sep = lines[0].includes("\t") ? "\t" : lines[0].includes(";") ? ";" : ",";
       const numericLines = lines.filter(ln => {
         const parts = ln.split(sep);
@@ -940,13 +1048,13 @@
       });
       resetCadView();
       renderExcelTable();
-      showExcelLog(`✅ تم استيراد ${rows.length} نقطة من ${file.name}.`, "success");
+      showExcelLog(`✅ تم رفع ${rows.length} نقطة من ${file.name} وعرض الرسمة!`, "success");
     };
     reader.readAsText(file);
   }
 
   /* ============================================================================
-     التصدير المباشر (بما في ذلك Excel نظيف يبدأ من أول نقطة بدون عناوين)
+     التصدير والحفظ (محمي للزوار: يتطلب تسجيل الدخول أو إنشاء حساب)
      ============================================================================ */
   function downloadBlob(content, filename, mime) {
     const blob = new Blob([content], { type: mime });
@@ -976,13 +1084,10 @@
         if (isNaN(eVal) || isNaN(nVal)) return;
 
         if (mode === "xlsx_pnz") {
-          // P, N, Z بدون عناوين (يبدأ من أول نقطة مباشرة)
           aoaData.push([pVal, nVal, isNaN(zVal) ? 0 : zVal]);
         } else if (mode === "xlsx_pnez") {
-          // P, N, E, Z بدون عناوين
           aoaData.push([pVal, nVal, eVal, isNaN(zVal) ? 0 : zVal]);
         } else {
-          // P, E, N, Z, Code بدون عناوين
           aoaData.push([pVal, eVal, nVal, isNaN(zVal) ? 0 : zVal, cVal]);
         }
       });
@@ -992,11 +1097,17 @@
       window.XLSX.utils.book_append_sheet(wb, ws, "Points");
       const label = mode === "xlsx_pnz" ? "PNZ" : mode === "xlsx_pnez" ? "PNEZ" : "PENZD";
       window.XLSX.writeFile(wb, `GeoDev_${label}_Clean_${Date.now()}.xlsx`);
-      showExcelLog(`📗 تم تصدير ملف Excel نظيف (${label}) يبدأ من النقطة رقم 1 مباشرة بدون أي سطور عناوين!`, "success");
+      showExcelLog(`📗 تم حفظ وتصدير ملف Excel نظيف (${label}) يبدأ من النقطة 1 مباشرة!`, "success");
     });
   }
 
   function exportData(format) {
+    // منع التصدير والحفظ للزوار غير المسجلين
+    if (!checkAuthState()) {
+      openAuthRequiredModal("حفظ وتصدير الملفات بصيغ Excel و AutoCAD و GIS");
+      return;
+    }
+
     if (!rows.length) return showExcelLog("الجدول فارغ، أضف نقاطاً أولاً.", "error");
     const { pKey, eKey, nKey, zKey, cKey } = getCoordKeys();
 
@@ -1033,7 +1144,7 @@
 
       dxf.push("0", "ENDSEC", "0", "EOF");
       downloadBlob(dxf.join("\r\n") + "\r\n", `GeoDev_AutoCAD_${Date.now()}.dxf`, "application/dxf");
-      showExcelLog("📕 تم تصدير لوحة AutoCAD DXF (.dxf) بطبقات النقاط والأرقام والمناسيب والخطوط!", "success");
+      showExcelLog("📕 تم تصدير لوحة AutoCAD DXF (.dxf) بنجاح!", "success");
       return;
     }
 
@@ -1064,7 +1175,7 @@
         return [...vals, geom].join(",");
       });
       downloadBlob("\uFEFF" + [wktHeader, ...wktRows].join("\n"), `GeoDev_ArcGISPro_WKT_${Date.now()}.csv`, "text/csv;charset=utf-8;");
-      showExcelLog("📊 تم تصدير جدول ArcGIS Pro بحقل GEOMETRY_WKT ثلاثي الأبعاد!", "success");
+      showExcelLog("📊 تم تصدير جدول ArcGIS Pro بحقل GEOMETRY_WKT!", "success");
       return;
     }
 
@@ -1087,7 +1198,7 @@
         .filter(Boolean);
 
       downloadBlob(JSON.stringify({ type: "FeatureCollection", features }, null, 2), `GeoDev_ArcGIS_QGIS_${Date.now()}.geojson`, "application/geo+json;charset=utf-8;");
-      showExcelLog("🗺️ تم تصدير طبقة GeoJSON جاهزة للفتح في ArcGIS Pro و QGIS!", "success");
+      showExcelLog("🗺️ تم تصدير طبقة GeoJSON لـ ArcGIS Pro و QGIS!", "success");
       return;
     }
 
@@ -1104,7 +1215,7 @@
         .join("\n");
       const kml = `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>GeoDev Survey</name>\n${marks}\n</Document></kml>`;
       downloadBlob(kml, `GeoDev_GoogleEarth_${Date.now()}.kml`, "application/vnd.google-earth.kml+xml;charset=utf-8;");
-      showExcelLog("🛰️ تم تصدير ملف Google Earth (.kml) بنجاح!", "success");
+      showExcelLog("🛰️ تم تصدير ملف Google Earth (.kml)!", "success");
       return;
     }
 
@@ -1119,7 +1230,7 @@
         sdrLines.push(`08KI${p}${n}${e}${z}${c}`);
       });
       downloadBlob(sdrLines.join("\r\n") + "\r\n", `GeoDev_Sokkia_${Date.now()}.sdr`, "text/plain;charset=utf-8;");
-      showExcelLog("📡 تم تصدير ملف Sokkia SDR (.sdr) جاهز للتوتال ستيشن!", "success");
+      showExcelLog("📡 تم تصدير ملف Sokkia SDR (.sdr)!", "success");
       return;
     }
 
@@ -1133,7 +1244,7 @@
         return `11${String(idx + 1).padStart(4, "0")}+${p} 81..10${fmt(eMm)} 82..10${fmt(nMm)} 83..10${fmt(zMm)}`;
       });
       downloadBlob(gsiLines.join("\r\n") + "\r\n", `GeoDev_Leica_${Date.now()}.gsi`, "text/plain;charset=utf-8;");
-      showExcelLog("📡 تم تصدير ملف Leica GSI (.gsi) جاهز لأجهزة لايكا!", "success");
+      showExcelLog("📡 تم تصدير ملف Leica GSI (.gsi)!", "success");
       return;
     }
 
@@ -1142,7 +1253,7 @@
         .filter(r => !isNaN(parseFloat(r[eKey])) && !isNaN(parseFloat(r[nKey])))
         .map(r => [r[pKey] || "", r[eKey] || "", r[nKey] || "", r[zKey] || "0", r[cKey] || ""].join(","));
       downloadBlob("\uFEFF" + csvLines.join("\n"), `GeoDev_Civil3D_PENZD_${Date.now()}.csv`, "text/csv;charset=utf-8;");
-      showExcelLog("📘 تم تصدير ملف Civil 3D (PENZD .csv) بدون عناوين جاهز للاستيراد المباشر!", "success");
+      showExcelLog("📘 تم تصدير ملف Civil 3D (PENZD .csv)!", "success");
       return;
     }
 
@@ -1180,23 +1291,28 @@ ${ptsLisp}
 )
 `;
       downloadBlob(lispCode, `GeoDev_PlotPoints_${Date.now()}.lsp`, "text/plain;charset=utf-8;");
-      showExcelLog("⚡ تم تصدير ملف AutoLISP (.lsp)! اكتب الأمر GD_PLOT_PTS داخل الأوتوكاد.", "success");
+      showExcelLog("⚡ تم تصدير ملف AutoLISP (.lsp)!", "success");
     }
   }
 
   /* ============================================================================
-     محرك الأوامر الذكية بالعربي والإنجليزي
+     محرك الأوامر الذكية (محمي للزوار: يطلب تسجيل الدخول عند التنفيذ)
      ============================================================================ */
   function executeAICommand(rawPrompt) {
     const cmd = String(rawPrompt || "").trim();
     if (!cmd) return;
+
+    // إذا كان المستخدم زائراً (غير مسجل دخول)، يظهر له طلب تسجيل الدخول فوراً
+    if (!checkAuthState()) {
+      openAuthRequiredModal("تشغيل أوامر الذكاء الاصطناعي وحفظ التعديلات");
+      return;
+    }
+
     saveSnapshot();
-    const { pKey, eKey, nKey, zKey, cKey } = getCoordKeys();
+    const { pKey, eKey, nKey, zKey } = getCoordKeys();
 
     if (/ترقيم|رقم\s*النقاط/i.test(cmd)) {
-      rows.forEach((r, idx) => {
-        r[pKey] = String(idx + 1);
-      });
+      rows.forEach((r, idx) => { r[pKey] = String(idx + 1); });
       renderExcelTable();
       drawCadPreview();
       showExcelLog(`🔢 تم إعادة ترقيم جميع النقاط تسلسلياً من 1 إلى ${rows.length}.`, "success");
@@ -1260,7 +1376,7 @@ ${ptsLisp}
         rows[i].Azimuth_deg = az.toFixed(4) + "°";
       }
       renderExcelTable();
-      showExcelLog("✅ تم حساب المسافة والانحراف وإضافتهما كأعمدة جديدة في الجدول.", "success");
+      showExcelLog("✅ تم حساب المسافة والانحراف وإضافتهما كأعمدة جديدة.", "success");
       return;
     }
 
@@ -1288,13 +1404,8 @@ ${ptsLisp}
       return;
     }
 
-    const writeMatch = cmd.match(/(?:اكتب|حط|سجل|أضف|اضف|ضع)\s*(?:لي\s*)?(?:في\s*(?:ملف\s*)?(?:الإكسيل|الاكسيل|الجدول)\s*)?(.+)/i);
-    if (writeMatch) {
-      const payload = writeMatch[1].trim();
-      if (!columns.includes("Note")) columns.push("Note");
-      rows.forEach(r => (r.Note = payload));
-      renderExcelTable();
-      showExcelLog(`✅ تم تسجيل الملاحظة «${payload}» في الجدول.`, "success");
+    if (/حفظ|احفظ|تصدير|صدر/i.test(cmd)) {
+      exportCleanHeaderlessExcel("xlsx_penzd");
       return;
     }
 
@@ -1367,7 +1478,6 @@ ${ptsLisp}
     canvas.height = Math.max(250, H * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    // خلفية أوتوكاد سوداء مع شبكة إحداثيات
     ctx.fillStyle = "#04060a";
     ctx.fillRect(0, 0, W, H);
     ctx.strokeStyle = "rgba(56, 189, 248, 0.08)";
@@ -1413,7 +1523,6 @@ ${ptsLisp}
       y: centerY - (n - midN) * scale
     });
 
-    // رسم الخط الواصل بين النقاط
     if (connectLinesOnCanvas && pts.length >= 2) {
       ctx.beginPath();
       ctx.strokeStyle = "#38bdf8";
@@ -1426,7 +1535,6 @@ ${ptsLisp}
       ctx.stroke();
     }
 
-    // حساب النقاط الظاهرة داخل إطار الشاشة لتجنب الازدحام في الملفات الضخمة
     const visiblePts = [];
     pts.forEach(pt => {
       const c = toCanvas(pt.e, pt.n);
@@ -1453,7 +1561,6 @@ ${ptsLisp}
       }
     });
 
-    // مؤشر نسبة التقريب أعلى يمين الشاشة
     ctx.fillStyle = "rgba(15, 23, 42, 0.8)";
     ctx.fillRect(W - 115, 8, 107, 22);
     ctx.fillStyle = "#38bdf8";
@@ -1467,7 +1574,6 @@ ${ptsLisp}
     if (!wrapper || wrapper.dataset.bound) return;
     wrapper.dataset.bound = "1";
 
-    // تحكم الماوس (Wheel Zoom + Drag Pan)
     wrapper.addEventListener("wheel", e => {
       e.preventDefault();
       const factor = e.deltaY < 0 ? 1.25 : 0.8;
@@ -1493,7 +1599,6 @@ ${ptsLisp}
       isDraggingCanvas = false;
     });
 
-    // تحكم اللمس على الموبايل (إصبع واحد للتحريك + إصبعين للتكبير والتصغير)
     wrapper.addEventListener("touchstart", e => {
       if (e.target.closest(".gd-cad-zbtn")) return;
       if (e.touches.length === 1) {
@@ -1534,6 +1639,9 @@ ${ptsLisp}
     });
   }
 
+  /* ============================================================================
+     تحديد مكان العرض: للزوار في أول الموقع / شاشة الدخول، وللأعضاء في قسم المساحة
+     ============================================================================ */
   function findSurveyingSection() {
     const navButtons = Array.from(document.querySelectorAll("nav button, [data-t]"));
     const survBtn = navButtons.find(btn => (btn.textContent || "").trim() === "المساحة");
@@ -1544,29 +1652,95 @@ ${ptsLisp}
     return document.getElementById("s-surv") || document.getElementById("s-surveying") || null;
   }
 
-  function mountAIExcelStudio() {
-    const targetSec = findSurveyingSection();
-    if (!targetSec) return;
+  function findGuestLandingHost() {
+    return (
+      document.getElementById("authScreen") ||
+      document.getElementById("loginScreen") ||
+      document.getElementById("authOverlay") ||
+      document.querySelector(".auth-wrap, .login-wrap") ||
+      document.body
+    );
+  }
 
-    const existing = document.getElementById("gdAiExcelStudio");
-    if (existing) {
-      if (existing.parentElement !== targetSec) targetSec.prepend(existing);
-      bindCanvasInteractions();
+  function mountAIExcelStudio() {
+    const logged = checkAuthState();
+
+    // إزالة رسالة الزوار إذا قام المستخدم بتسجيل الدخول
+    const oldGuestBanner = document.getElementById("gdGuestWelcomeBanner");
+    if (logged && oldGuestBanner) {
+      oldGuestBanner.remove();
+    }
+
+    if (logged) {
+      const targetSec = findSurveyingSection();
+      if (!targetSec) return;
+
+      let container = document.getElementById("gdAiExcelStudio");
+      if (!container) {
+        container = document.createElement("div");
+        container.id = "gdAiExcelStudio";
+      }
+      if (container.parentElement !== targetSec) {
+        container.innerHTML = renderStudioHTML();
+        targetSec.prepend(container);
+        renderExcelTable();
+        bindCanvasInteractions();
+        setTimeout(drawCadPreview, 80);
+      }
       return;
     }
 
-    const container = document.createElement("div");
-    container.id = "gdAiExcelStudio";
-    container.innerHTML = renderStudioHTML();
-    targetSec.prepend(container);
+    // وضع الزائر (قبل تسجيل الدخول): يظهر في أول الموقع مع رسالة ترحيبية
+    const guestHost = findGuestLandingHost();
+    if (!guestHost) return;
 
-    renderExcelTable();
-    bindCanvasInteractions();
-    setTimeout(drawCadPreview, 80);
+    if (!document.getElementById("gdGuestWelcomeBanner")) {
+      const banner = document.createElement("div");
+      banner.id = "gdGuestWelcomeBanner";
+      banner.innerHTML = `
+        <div>
+          <strong>👋 أهلاً بك في منصة GeoDev — جرّب محطة إكسيل المساحة مجاناً قبل تسجيل الدخول!</strong>
+          <span>ارفع ملفات (Excel / DXF / CSV / SDR) من هاتفك وعاين الرسمة في لوحة الأوتوكاد الحية فوراً. سجّل الدخول لحفظ وتصدير الملفات.</span>
+        </div>
+        <button type="button" id="gdBannerScrollLoginBtn" class="gd-ex-btn gold">
+          🔐 تسجيل الدخول / إنشاء حساب
+        </button>
+      `;
+      if (guestHost === document.body) {
+        document.body.prepend(banner);
+      } else {
+        guestHost.appendChild(banner);
+      }
+    }
+
+    let container = document.getElementById("gdAiExcelStudio");
+    if (!container) {
+      container = document.createElement("div");
+      container.id = "gdAiExcelStudio";
+      container.innerHTML = renderStudioHTML();
+      const bannerEl = document.getElementById("gdGuestWelcomeBanner");
+      if (bannerEl && bannerEl.parentElement) {
+        bannerEl.insertAdjacentElement("afterend", container);
+      } else {
+        guestHost.appendChild(container);
+      }
+      renderExcelTable();
+      bindCanvasInteractions();
+      setTimeout(drawCadPreview, 80);
+    }
   }
 
   function bindEvents() {
     document.addEventListener("click", e => {
+      if (e.target.closest("#gdBannerScrollLoginBtn")) {
+        const authForm = document.querySelector('#authScreen input, #loginScreen input, form input[type="email"], form input[type="password"]');
+        if (authForm) {
+          authForm.scrollIntoView({ behavior: "smooth", block: "center" });
+          authForm.focus();
+        }
+        return;
+      }
+
       if (e.target.closest("#gdExcelAiExecBtn")) {
         const inp = document.getElementById("gdExcelAiPrompt");
         if (inp) executeAICommand(inp.value);
@@ -1582,7 +1756,6 @@ ${ptsLisp}
         return;
       }
 
-      // أزرار التقريب والتبعيد وتوسيط شاشة الكاد
       if (e.target.closest("#gdCadZoomInBtn")) {
         cadZoom = Math.min(80, cadZoom * 1.45);
         drawCadPreview();
@@ -1620,11 +1793,15 @@ ${ptsLisp}
         rows.push(...extracted);
         renderExcelTable();
         resetCadView();
-        showExcelLog(`📐 تم استخراج وإضافة ${extracted.length} نقطة من نص الأوتوكاد!`, "success");
+        showExcelLog(`📐 تم استخراج ${extracted.length} نقطة وعرضها في لوحة الكاد!`, "success");
         return;
       }
 
       if (e.target.closest("#gdApplyShiftBtn")) {
+        if (!checkAuthState()) {
+          openAuthRequiredModal("تطبيق إزاحة الإحداثيات وحفظ التعديلات");
+          return;
+        }
         const dE = parseFloat(document.getElementById("gdShiftE")?.value) || 0;
         const dN = parseFloat(document.getElementById("gdShiftN")?.value) || 0;
         const dZ = parseFloat(document.getElementById("gdShiftZ")?.value) || 0;
@@ -1643,6 +1820,10 @@ ${ptsLisp}
       }
 
       if (e.target.closest("#gdCalcCutFillBtn")) {
+        if (!checkAuthState()) {
+          openAuthRequiredModal("حساب كميات الحفر والردم وتصديرها");
+          return;
+        }
         const designLvl = parseFloat(document.getElementById("gdDesignLevelInput")?.value);
         if (isNaN(designLvl)) return showExcelLog("أدخل منسوب التصميم أولاً.", "error");
         saveSnapshot();
@@ -1665,12 +1846,21 @@ ${ptsLisp}
           }
         });
         renderExcelTable();
-        showExcelLog(`🧮 تم حساب الحفر والردم مقارنة بمنسوب ${designLvl} م (متوسط فروق الحفر: ${totalCut.toFixed(2)} م | الردم: ${totalFill.toFixed(2)} م).`, "success");
+        showExcelLog(`🧮 تم حساب الحفر والردم مقارنة بمنسوب ${designLvl} م.`, "success");
         return;
       }
 
       if (e.target.closest("#gdExSwapENBtn")) {
-        executeAICommand("تبديل الشرق والشمال");
+        saveSnapshot();
+        const { eKey, nKey } = getCoordKeys();
+        rows.forEach(r => {
+          const tmp = r[eKey];
+          r[eKey] = r[nKey];
+          r[nKey] = tmp;
+        });
+        renderExcelTable();
+        resetCadView();
+        showExcelLog("🔄 تم تبديل إحداثيات الشرق (E) والشمال (N) للمعاينة.", "success");
         return;
       }
 
@@ -1762,11 +1952,34 @@ ${ptsLisp}
     });
   }
 
+  function startAuthWatcher() {
+    const attach = () => {
+      if (window.firebase && firebase.apps && firebase.apps.length) {
+        firebase.auth().onAuthStateChanged(user => {
+          isLoggedInUser = Boolean(user);
+          const oldStudio = document.getElementById("gdAiExcelStudio");
+          if (oldStudio) oldStudio.remove();
+          mountAIExcelStudio();
+        });
+        return true;
+      }
+      return false;
+    };
+
+    if (!attach()) {
+      const iv = setInterval(() => {
+        if (attach()) clearInterval(iv);
+      }, 350);
+      setTimeout(() => clearInterval(iv), 10000);
+    }
+  }
+
   function init() {
     ensureSheetJS();
     injectStyles();
     bindEvents();
     mountAIExcelStudio();
+    startAuthWatcher();
 
     const obs = new MutationObserver(() => {
       mountAIExcelStudio();
