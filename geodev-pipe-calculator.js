@@ -1,12 +1,12 @@
 /* ============================================================================
-   GeoDev Pipe & Trench Leveling Calculator (V1)
-   - حاسبة منسوب قاع الحفر + حاسبة جري ظهر الماسورة
-   - جدول تفصيلي للنقاط والمسافات والمناسيب وقراءات القامة المطلوبة + تصدير CSV
+   GeoDev Pipe & Trench Leveling Calculator (V2)
+   - مربوط بدقة بقسم "المساحة" فقط (عبر زر المساحة في شريط التنقل)
+   - حاسبة منسوب قاع الحفر + حاسبة جري ظهر الماسورة + تصدير CSV
    ============================================================================ */
 (function () {
   "use strict";
-  if (window.GEOPipeCalcInit) return;
-  window.GEOPipeCalcInit = true;
+  if (window.GEOPipeCalcV2Init) return;
+  window.GEOPipeCalcV2Init = true;
 
   let activePipeTab = "trench"; // "trench" = قاع الحفر | "crown" = ظهر الماسورة
   let lastTableRows = [];
@@ -449,16 +449,34 @@
     setTimeout(() => URL.revokeObjectURL(url), 1500);
   }
 
-  function mountPipeCalculator() {
-    const targetSec =
+  // تحديد قسم "المساحة" بدقة من زر التبويب في شريط التنقل السفلي
+  function findSurveyingSection() {
+    const navButtons = Array.from(document.querySelectorAll("nav button, [data-t]"));
+    const survBtn = navButtons.find(btn => (btn.textContent || "").trim() === "المساحة");
+    if (survBtn && survBtn.dataset && survBtn.dataset.t) {
+      const secByTab = document.getElementById("s-" + survBtn.dataset.t);
+      if (secByTab) return secByTab;
+    }
+
+    return (
       document.getElementById("s-surv") ||
       document.getElementById("s-surveying") ||
-      document.getElementById("s-calc") ||
-      Array.from(document.querySelectorAll(".sec")).find(s =>
-        (s.textContent || "").includes("المساحة") && s.id !== "s-academy"
-      );
+      document.getElementById("s-sv") ||
+      null
+    );
+  }
 
-    if (!targetSec || document.getElementById("gdPipeCalcCard")) return;
+  function mountPipeCalculator() {
+    const targetSec = findSurveyingSection();
+    if (!targetSec) return;
+
+    const existingCard = document.getElementById("gdPipeCalcCard");
+    if (existingCard) {
+      if (existingCard.parentElement !== targetSec) {
+        targetSec.appendChild(existingCard);
+      }
+      return;
+    }
 
     const card = document.createElement("div");
     card.id = "gdPipeCalcCard";
