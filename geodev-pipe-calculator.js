@@ -1,42 +1,45 @@
 /* ============================================================================
-   GeoDev Pipe & Trench Leveling Calculator (V2)
-   - مربوط بدقة بقسم "المساحة" فقط (عبر زر المساحة في شريط التنقل)
+   GeoDev Pipe & Trench Leveling Calculator (V3)
+   - متناسق 100% مع ألوان وهوية منصة GeoDev (الداكن الفحمي + الذهبي والبرتقالي)
    - حاسبة منسوب قاع الحفر + حاسبة جري ظهر الماسورة + تصدير CSV
    ============================================================================ */
 (function () {
   "use strict";
-  if (window.GEOPipeCalcV2Init) return;
-  window.GEOPipeCalcV2Init = true;
+  if (window.GEOPipeCalcV3Init) return;
+  window.GEOPipeCalcV3Init = true;
 
   let activePipeTab = "trench"; // "trench" = قاع الحفر | "crown" = ظهر الماسورة
   let lastTableRows = [];
   let lastModeTitle = "";
 
   function injectStyles() {
-    if (document.getElementById("gdPipeCalcStyles")) return;
+    const oldStyle = document.getElementById("gdPipeCalcStyles");
+    if (oldStyle) oldStyle.remove();
+
     const style = document.createElement("style");
     style.id = "gdPipeCalcStyles";
     style.textContent = `
       #gdPipeCalcCard {
         direction: rtl;
         text-align: right;
-        background: #0f172a;
-        border: 1.5px solid #1d4ed8;
+        background: var(--cd, #211f1d);
+        border: 1.5px solid #e09f24;
         border-radius: 18px;
         padding: 16px;
         margin: 16px 0;
-        color: #f8fafc;
-        box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
+        color: var(--tx, #f5f5f4);
+        box-shadow: 0 12px 30px rgba(0, 0, 0, 0.32);
       }
       .gd-pc-banner {
-        background: linear-gradient(135deg, #0284c7, #1d4ed8);
-        color: #ffffff;
+        background: linear-gradient(135deg, #e09f24, #b45309);
+        color: #141210;
         text-align: center;
         padding: 14px;
         border-radius: 13px;
         font-size: 18px;
         font-weight: 900;
         margin-bottom: 12px;
+        box-shadow: 0 4px 14px rgba(224, 159, 36, 0.25);
       }
       .gd-pc-tabs {
         display: grid;
@@ -47,9 +50,9 @@
       .gd-pc-tab-btn {
         padding: 12px 10px;
         border-radius: 11px;
-        border: 1.5px solid #334155;
-        background: #1e293b;
-        color: #cbd5e1;
+        border: 1.5px solid #3f3a36;
+        background: #292524;
+        color: #d6d3d1;
         font-size: 13.5px;
         font-weight: 800;
         cursor: pointer;
@@ -57,13 +60,13 @@
         transition: all 0.2s ease;
       }
       .gd-pc-tab-btn.active {
-        background: #0284c7;
-        border-color: #38bdf8;
-        color: #ffffff;
+        background: linear-gradient(135deg, rgba(224, 159, 36, 0.22), rgba(180, 83, 9, 0.28));
+        border-color: #e09f24;
+        color: #fbbf24;
       }
       .gd-pc-panel {
-        background: #111827;
-        border: 1px solid #1f2937;
+        background: #1c1917;
+        border: 1px solid #38332e;
         border-radius: 14px;
         padding: 14px;
       }
@@ -71,7 +74,7 @@
         margin: 0 0 12px;
         font-size: 15.5px;
         font-weight: 900;
-        color: #38bdf8;
+        color: #fbbf24;
       }
       .gd-pc-grid {
         display: grid;
@@ -82,22 +85,28 @@
         display: block;
         font-size: 12px;
         font-weight: 800;
-        color: #e2e8f0;
+        color: #e7e5e4;
         margin-bottom: 5px;
       }
       .gd-pc-field input,
       .gd-pc-field select {
         width: 100%;
         box-sizing: border-box;
-        padding: 10px 12px;
+        padding: 10px 8px;
         border-radius: 10px;
-        border: 1.5px solid #334155;
-        background: #090d16;
+        border: 1.5px solid #3f3a36;
+        background: #292524;
         color: #ffffff;
-        font-size: 14px;
+        font-size: 13.5px;
         font-weight: 800;
         text-align: center;
         font-family: inherit;
+        transition: border-color 0.2s ease;
+      }
+      .gd-pc-field input:focus,
+      .gd-pc-field select:focus {
+        outline: none;
+        border-color: #e09f24;
       }
       .gd-pc-submit {
         width: 100%;
@@ -105,23 +114,24 @@
         padding: 13px;
         border-radius: 12px;
         border: 0;
-        background: linear-gradient(135deg, #0284c7, #1d4ed8);
-        color: #ffffff;
+        background: linear-gradient(135deg, #e09f24, #c26d1f);
+        color: #141210;
         font-size: 15px;
         font-weight: 900;
         cursor: pointer;
         font-family: inherit;
+        box-shadow: 0 4px 14px rgba(224, 159, 36, 0.28);
       }
       .gd-pc-hint {
         margin: 9px 0 0;
         font-size: 11.5px;
-        color: #94a3b8;
+        color: #a8a29e;
         text-align: center;
         line-height: 1.6;
       }
       .gd-pc-summary-box {
-        background: #111827;
-        border: 1px solid #334155;
+        background: #1c1917;
+        border: 1px solid #3f3a36;
         border-radius: 13px;
         padding: 13px;
         margin-top: 14px;
@@ -129,12 +139,13 @@
         line-height: 1.9;
         font-size: 14px;
         font-weight: 800;
+        color: #f5f5f4;
       }
       .gd-pc-table-wrap {
         margin-top: 12px;
         overflow-x: auto;
         border-radius: 12px;
-        border: 1px solid #334155;
+        border: 1px solid #44403c;
       }
       .gd-pc-table {
         width: 100%;
@@ -143,29 +154,29 @@
         font-size: 13px;
       }
       .gd-pc-table th {
-        background: #0284c7;
+        background: linear-gradient(135deg, #d97706, #b45309);
         color: #ffffff;
         padding: 10px 8px;
         font-weight: 900;
-        border: 1px solid #0369a1;
+        border: 1px solid #92400e;
       }
       .gd-pc-table td {
         padding: 9px 8px;
-        border: 1px solid #1e293b;
-        background: #090d16;
-        color: #f8fafc;
+        border: 1px solid #292524;
+        background: #1c1917;
+        color: #f5f5f4;
         font-weight: 700;
       }
       .gd-pc-table tr:nth-child(even) td {
-        background: #0f172a;
+        background: #24211e;
       }
       .gd-pc-export-btn {
         width: 100%;
         margin-top: 10px;
-        padding: 10px;
+        padding: 11px;
         border-radius: 10px;
-        border: 1px solid #e09f24;
-        background: rgba(224, 159, 36, 0.15);
+        border: 1.5px solid #e09f24;
+        background: rgba(224, 159, 36, 0.14);
         color: #fbbf24;
         font-weight: 800;
         font-size: 13px;
@@ -226,8 +237,8 @@
             <div class="gd-pc-field">
               <label>اتجاه الميل</label>
               <select id="pcTrDir">
-                <option value="down" selected>المنسوب يقل مع المسافة (هبوط)</option>
-                <option value="up">المنسوب يزيد مع المسافة (صعود)</option>
+                <option value="down" selected>هبوط (يقل مع المسافة)</option>
+                <option value="up">صعود (يزيد مع المسافة)</option>
               </select>
             </div>
           </div>
@@ -287,7 +298,7 @@
       `}
 
       <div id="gdPipeCalcResultsArea">
-        <div class="gd-pc-summary-box" style="color:#94a3b8;">أدخل البيانات واضغط «احسب»</div>
+        <div class="gd-pc-summary-box" style="color:#a8a29e;">أدخل البيانات واضغط «احسب»</div>
       </div>
     `;
   }
@@ -330,10 +341,10 @@
     const out = document.getElementById("gdPipeCalcResultsArea");
     out.innerHTML = `
       <div class="gd-pc-summary-box">
-        <div>منسوب خط النظر HI = <span style="color:#38bdf8;">${hi.toFixed(3)}</span> م</div>
+        <div>منسوب خط النظر HI = <span style="color:#fbbf24;">${hi.toFixed(3)}</span> م</div>
         <div>منسوب الإنفيرت ليفل = ${invert.toFixed(3)} م</div>
         <div>مقدار النزول = ${drop.toFixed(3)} م</div>
-        <div>منسوب قاع الحفر عند البداية = <span style="color:#fbbf24;">${startTrench.toFixed(3)}</span> م</div>
+        <div>منسوب قاع الحفر عند البداية = <span style="color:#fb923c;">${startTrench.toFixed(3)}</span> م</div>
         <div>قراءة القامة المطلوبة عند البداية = <span style="color:#4ade80;">${startStaff.toFixed(3)}</span> م</div>
       </div>
 
@@ -402,9 +413,9 @@
     const out = document.getElementById("gdPipeCalcResultsArea");
     out.innerHTML = `
       <div class="gd-pc-summary-box">
-        <div>HI = <span style="color:#38bdf8;">${hi.toFixed(3)}</span></div>
+        <div>HI = <span style="color:#fbbf24;">${hi.toFixed(3)}</span></div>
         <div>Invert Reading = ${invertStaff.toFixed(3)}</div>
-        <div>منسوب ظهر الماسورة عند البداية = <span style="color:#fbbf24;">${startCrown.toFixed(3)}</span> م</div>
+        <div>منسوب ظهر الماسورة عند البداية = <span style="color:#fb923c;">${startCrown.toFixed(3)}</span> م</div>
         <div>قراءة القامة عند البداية = <span style="color:#4ade80;">${startStaff.toFixed(3)}</span> م</div>
       </div>
 
@@ -449,7 +460,6 @@
     setTimeout(() => URL.revokeObjectURL(url), 1500);
   }
 
-  // تحديد قسم "المساحة" بدقة من زر التبويب في شريط التنقل السفلي
   function findSurveyingSection() {
     const navButtons = Array.from(document.querySelectorAll("nav button, [data-t]"));
     const survBtn = navButtons.find(btn => (btn.textContent || "").trim() === "المساحة");
