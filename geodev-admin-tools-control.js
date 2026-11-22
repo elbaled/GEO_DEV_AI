@@ -1,13 +1,12 @@
 /* ============================================================================
-   GeoDev Admin Tools & Tiers Controller (V1.0)
-   - يضيف جميع الأدوات الجديدة إلى لوحة "التحكم في الأدوات والأقسام" عند الأدمن
-   - يدعم 4 حالات لكل أداة: مجاني (مفتوحة) | PLUS (بلس) | PRO (برو) | مقفول
-   - يضيف خيار PLUS إلى قوائم التحكم الموجودة في الإدارة + يطبق الحماية فعلياً على الأدوات
+   GeoDev Admin Tools & Tiers Controller (V1.1 - Zero-Lag Fixed Edition)
+   - تم حل مشكلة التهنيج وحلقات التكرار نهائياً
+   - التحكم في الأدوات: مجاني (مفتوحة) | PLUS (بلس) | PRO (برو) | مقفول
    ============================================================================ */
 (function () {
   "use strict";
-  if (window.GeoDevAdminToolsCtrlInit) return;
-  window.GeoDevAdminToolsCtrlInit = true;
+  if (window.GeoDevAdminToolsCtrlV11Init) return;
+  window.GeoDevAdminToolsCtrlV11Init = true;
 
   const ADMIN_EMAIL = "eng.ahmedsamir.gis@gmail.com";
   const STORAGE_KEY = "gd_custom_tools_permissions_v1";
@@ -51,7 +50,9 @@
   ];
 
   let permissionsMap = {};
-  let userTier = "free"; // "free" | "plus" | "pro" | "admin"
+  let userTier = "free";
+  let isRendering = false;
+  let debounceTimer = null;
 
   function getDb() {
     try {
@@ -94,7 +95,7 @@
       }
     } catch (_) {}
 
-    renderAdminCustomToolsPanel();
+    renderAdminCustomToolsPanel(true);
     enforceToolPermissions();
   }
 
@@ -105,7 +106,7 @@
 
     const statusLabel = document.getElementById("gdCustomToolsSaveStatus");
     if (statusLabel) {
-      statusLabel.textContent = "⏳ جاري حفظ الصلاحية في السحابة...";
+      statusLabel.textContent = "⏳ جاري الحفظ...";
       statusLabel.style.color = "#fbbf24";
     }
 
@@ -120,126 +121,127 @@
           { merge: true }
         );
         if (statusLabel) {
-          statusLabel.textContent = "✅ تم حفظ وتطبيق الصلاحية على جميع المستخدمين فوراً.";
+          statusLabel.textContent = "✅ تم الحفظ وتطبيق الصلاحية فوراً.";
           statusLabel.style.color = "#4ade80";
         }
-      } catch (err) {
+      } catch (_) {
         if (statusLabel) {
-          statusLabel.textContent = "⚠️ تم الحفظ محلياً (تأكد من صلاحية geodev_config في Firebase).";
+          statusLabel.textContent = "⚠️ تم الحفظ محلياً.";
           statusLabel.style.color = "#facc15";
         }
       }
     }
   }
 
-  /* ============================================================================
-     تحديث القوائم الموجودة في لوحة الإدارة لإضافة خيار PLUS (بلس)
-     ============================================================================ */
   function upgradeExistingAdminDropdowns() {
-    const adminSec = document.getElementById("s-admin") || document.body;
+    const adminSec = document.getElementById("s-admin");
+    if (!adminSec) return;
     const selects = adminSec.querySelectorAll("select");
     selects.forEach(sel => {
-      if (sel.dataset.gdPlusUpgraded) return;
+      if (sel.dataset.gdPlusUpgraded || sel.dataset.gdToolTierSelect) return;
       const optsText = Array.from(sel.options).map(o => o.textContent.trim()).join("|");
       if ((optsText.includes("مجاني") || optsText.includes("PRO")) && !optsText.includes("PLUS")) {
         sel.dataset.gdPlusUpgraded = "1";
         const plusOpt = document.createElement("option");
         plusOpt.value = "plus";
         plusOpt.textContent = "PLUS";
-        // إدراج PLUS بعد مجاني وقبل PRO
         const proIdx = Array.from(sel.options).findIndex(o => o.textContent.includes("PRO"));
-        if (proIdx >= 0) {
-          sel.insertBefore(plusOpt, sel.options[proIdx]);
-        } else {
-          sel.appendChild(plusOpt);
-        }
+        if (proIdx >= 0) sel.insertBefore(plusOpt, sel.options[proIdx]);
+        else sel.appendChild(plusOpt);
       }
     });
   }
 
-  /* ============================================================================
-     حقن قسم "أدوات المنصة الحديثة والمضافة" داخل لوحة التحكم في الأدوات والأقسام
-     ============================================================================ */
   function findAdminToolsContainer() {
-    const headings = Array.from(document.querySelectorAll("h2, h3, h4, strong, div"));
+    const adminSec = document.getElementById("s-admin");
+    if (!adminSec) return null;
+    const headings = Array.from(adminSec.querySelectorAll("h2, h3, h4, strong, div"));
     const targetTitle = headings.find(el =>
       el.children.length === 0 && (el.textContent || "").includes("التحكم في الأدوات والأقسام")
     );
     if (targetTitle) {
       return targetTitle.closest(".card, .sec, section, div[style]") || targetTitle.parentElement;
     }
-    return document.getElementById("s-admin") || null;
+    return adminSec;
   }
 
-  function renderAdminCustomToolsPanel() {
-    upgradeExistingAdminDropdowns();
-
+  function renderAdminCustomToolsPanel(forceRebuild = false) {
+    if (isRendering) return;
     const host = findAdminToolsContainer();
     if (!host) return;
 
-    let panel = document.getElementById("gdAdminAddedToolsBox");
-    if (!panel) {
-      panel = document.createElement("div");
-      panel.id = "gdAdminAddedToolsBox";
-      panel.style.cssText = `
-        direction: rtl;
-        text-align: right;
-        margin-top: 16px;
-        padding: 14px;
-        border-radius: 14px;
-        border: 1.5px solid #e09f24;
-        background: rgba(224, 159, 36, 0.06);
-      `;
-      host.appendChild(panel);
+    const existingPanel = document.getElementById("gdAdminAddedToolsBox");
+    if (existingPanel && !forceRebuild) {
+      return; // لا تقم بإعادة البناء إذا كانت اللوحة موجودة بالفعل
     }
 
-    const tierColors = {
-      free: "#22c55e",
-      plus: "#38bdf8",
-      pro: "#fbbf24",
-      locked: "#ef4444"
-    };
+    isRendering = true;
+    try {
+      upgradeExistingAdminDropdowns();
 
-    panel.innerHTML = `
-      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
-        <strong style="font-size:14.5px;color:#d97706;">🛠️ التحكم في الأدوات والمحطات الحديثة (مجاني / PLUS / PRO / مقفول)</strong>
-        <span id="gdCustomToolsSaveStatus" style="font-size:11.5px;font-weight:800;color:#64748b;">
-          اختر مستوى الوصول لكل أداة وسيُطبّق فوراً
-        </span>
-      </div>
+      let panel = existingPanel;
+      if (!panel) {
+        panel = document.createElement("div");
+        panel.id = "gdAdminAddedToolsBox";
+        panel.style.cssText = `
+          direction: rtl;
+          text-align: right;
+          margin-top: 16px;
+          padding: 14px;
+          border-radius: 14px;
+          border: 1.5px solid #e09f24;
+          background: rgba(224, 159, 36, 0.06);
+        `;
+        host.appendChild(panel);
+      }
 
-      <div style="display:flex;flex-direction:column;gap:8px;">
-        ${managedTools.map(tool => {
-          const cur = permissionsMap[tool.id] || tool.defaultTier;
-          return `
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 12px;border-radius:11px;background:var(--cd,#1e293b);border:1px solid var(--ln,#334155);">
-              <div>
-                <div style="font-size:13px;font-weight:900;color:var(--tx,#f8fafc);">${tool.name}</div>
-                <div style="font-size:11px;color:var(--mt,#94a3b8);">${tool.category}</div>
+      const tierColors = {
+        free: "#22c55e",
+        plus: "#38bdf8",
+        pro: "#fbbf24",
+        locked: "#ef4444"
+      };
+
+      panel.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
+          <strong style="font-size:14.5px;color:#d97706;">🛠️ التحكم في الأدوات والمحطات الحديثة (مجاني / PLUS / PRO / مقفول)</strong>
+          <span id="gdCustomToolsSaveStatus" style="font-size:11.5px;font-weight:800;color:#64748b;">
+            اختر مستوى الوصول لكل أداة
+          </span>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          ${managedTools.map(tool => {
+            const cur = permissionsMap[tool.id] || tool.defaultTier;
+            return `
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 12px;border-radius:11px;background:var(--cd,#1e293b);border:1px solid var(--ln,#334155);">
+                <div>
+                  <div style="font-size:13px;font-weight:900;color:var(--tx,#f8fafc);">${tool.name}</div>
+                  <div style="font-size:11px;color:var(--mt,#94a3b8);">${tool.category}</div>
+                </div>
+                <select data-gd-tool-tier-select="${tool.id}"
+                  style="min-width:125px;padding:7px 10px;border-radius:9px;border:1.5px solid ${tierColors[cur] || "#64748b"};background:var(--bg,#0f172a);color:${tierColors[cur] || "#fff"};font-weight:900;font-size:12.5px;cursor:pointer;font-family:inherit;">
+                  <option value="free" ${cur === "free" ? "selected" : ""}>مجاني (مفتوحة)</option>
+                  <option value="plus" ${cur === "plus" ? "selected" : ""}>PLUS (بلس)</option>
+                  <option value="pro" ${cur === "pro" ? "selected" : ""}>PRO (برو)</option>
+                  <option value="locked" ${cur === "locked" ? "selected" : ""}>مقفول (مخفي)</option>
+                </select>
               </div>
-              <select data-gd-tool-tier-select="${tool.id}"
-                style="min-width:125px;padding:7px 10px;border-radius:9px;border:1.5px solid ${tierColors[cur] || "#64748b"};background:var(--bg,#0f172a);color:${tierColors[cur] || "#fff"};font-weight:900;font-size:12.5px;cursor:pointer;font-family:inherit;">
-                <option value="free" ${cur === "free" ? "selected" : ""}>مجاني (مفتوحة)</option>
-                <option value="plus" ${cur === "plus" ? "selected" : ""}>PLUS (بلس)</option>
-                <option value="pro" ${cur === "pro" ? "selected" : ""}>PRO (برو)</option>
-                <option value="locked" ${cur === "locked" ? "selected" : ""}>مقفول (مخفي)</option>
-              </select>
-            </div>
-          `;
-        }).join("")}
-      </div>
-    `;
+            `;
+          }).join("")}
+        </div>
+      `;
+    } finally {
+      isRendering = false;
+    }
   }
 
-  /* ============================================================================
-     تطبيق صلاحيات الأدوات فعلياً على المستخدمين حسب باقتهم
-     ============================================================================ */
   function hasAccessToTier(requiredTier) {
     if (userTier === "admin") return true;
     if (requiredTier === "free") return true;
     if (requiredTier === "plus") return userTier === "plus" || userTier === "pro";
     if (requiredTier === "pro") return userTier === "pro";
-    return false; // "locked"
+    return false;
   }
 
   function enforceToolPermissions() {
@@ -249,6 +251,11 @@
       const targets = document.querySelectorAll(tool.selector);
 
       targets.forEach(el => {
+        const currentApplied = el.dataset.gdAppliedTier;
+        const stateSig = `${reqTier}_${allowed ? "1" : "0"}`;
+        if (currentApplied === stateSig) return; // تجنب التعديل المتكرر لنفس العنصر
+        el.dataset.gdAppliedTier = stateSig;
+
         const lockId = `gdToolLockOverlay_${tool.id}`;
         const existingOverlay = el.querySelector(`#${lockId}`);
 
@@ -263,7 +270,6 @@
           return;
         }
 
-        // إظهار غطاء الترقية إلى PLUS أو PRO
         el.style.display = "";
         el.style.position = "relative";
         if (!existingOverlay) {
@@ -343,7 +349,18 @@
         const toolId = sel.dataset.gdToolTierSelect;
         const val = sel.value;
         saveToolPermission(toolId, val);
-        renderAdminCustomToolsPanel();
+        renderAdminCustomToolsPanel(true);
+      }
+    });
+
+    // مراقب خفيف يعمل بتأخير (Debounce) عند التنقل بين الأقسام فقط بدون إرهاق المتصفح
+    document.addEventListener("click", e => {
+      if (e.target.closest("nav button, [data-t]")) {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+          renderAdminCustomToolsPanel(false);
+          enforceToolPermissions();
+        }, 250);
       }
     });
   }
@@ -351,8 +368,10 @@
   function init() {
     loadLocalPermissions();
     bindEvents();
-    renderAdminCustomToolsPanel();
-    enforceToolPermissions();
+    setTimeout(() => {
+      renderAdminCustomToolsPanel(false);
+      enforceToolPermissions();
+    }, 400);
 
     const checkFb = setInterval(() => {
       if (window.firebase && firebase.apps && firebase.apps.length) {
@@ -360,19 +379,11 @@
         syncPermissionsFromCloud();
         firebase.auth().onAuthStateChanged(user => {
           detectCurrentUserTier(user);
-          renderAdminCustomToolsPanel();
+          renderAdminCustomToolsPanel(true);
         });
       }
-    }, 350);
+    }, 500);
     setTimeout(() => clearInterval(checkFb), 12000);
-
-    const obs = new MutationObserver(() => {
-      renderAdminCustomToolsPanel();
-      enforceToolPermissions();
-    });
-    if (document.body) {
-      obs.observe(document.body, { childList: true, subtree: true });
-    }
   }
 
   if (document.readyState === "loading") {
