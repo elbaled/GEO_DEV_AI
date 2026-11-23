@@ -1,15 +1,13 @@
 /* ============================================================================
-   GeoDev Survey & GIS Excel Workstation (V6.0 ENTERPRISE)
-   - تصدير Civil 3D بدون BOM (يعمل فوراً على PENZD / PENZ / PNEZD بلا أخطاء)
-   - مركز تصدير متكامل: اختيار الترتيب (PENZD/PENZ/PNEZD/PEN) + اختيار الفئة (الكل/إنارة/صرف MNH/أشجار/طرق)
-   - دعم صيغ: Civil 3D CSV, TXT, AutoCAD DXF & DWG Auto-Save Script, Sokkia SDR & STR, Leica GSI, Surfer DAT, ArcGIS/QGIS, XLSX
-   - 3 سمات احترافية (Dark Gold / Engineering Light / CAD Blueprint) عبر زر المصباح
-   - توجيه تلقائي من المساعد الرئيسي للمنصة عند طلب أدوات الإكسيل أو التحويل المساحي
+   GeoDev Survey & GIS Excel Workstation (V6.1 ENTERPRISE - Accurate Code Engine)
+   - إصلاح فصل نقاط الأرض الطبيعية (EG) عن نقاط المطابق (MNH) حتى لو كان عمود Type يحتوي على SAN
+   - تصدير Civil 3D بدون BOM (PENZD / PENZ / PNEZD / PEN)
+   - مركز تصدير متكامل + 3 سمات + دعم AutoCAD DXF/DWG و Sokkia STR/SDR و ArcGIS Pro
    ============================================================================ */
 (function () {
   "use strict";
-  if (window.GeoDevAIExcelV6Init) return;
-  window.GeoDevAIExcelV6Init = true;
+  if (window.GeoDevAIExcelV61Init) return;
+  window.GeoDevAIExcelV61Init = true;
 
   function ensureSheetJS(callback) {
     if (window.XLSX) {
@@ -35,18 +33,16 @@
   let historyStack = [];
   let activeSubTab = "grid";
   let activeCodeFilter = "ALL"; // ALL | SEWER | LIGHT | TREES | NGL | ROAD | DIR
-  let currentTheme = localStorage.getItem("gd_excel_theme_v6") || "dark_gold"; // dark_gold | light_eng | cad_blue
+  let currentTheme = localStorage.getItem("gd_excel_theme_v6") || "dark_gold";
   let crsMode = "UTM36N";
   let showLabelsOnCanvas = true;
   let connectMode = "BY_CODE";
   let searchFilter = "";
   let isLoggedInUser = false;
 
-  // إعدادات مركز التصدير الموحد
-  let exportColOrder = "PENZD"; // PENZD | PENZ | PNEZD | PEN | PNE
-  let exportTargetScope = "ALL"; // ALL | FILTERED | SEWER | LIGHT | TREES | NGL_ROAD
+  let exportColOrder = "PENZD";
+  let exportTargetScope = "ALL";
 
-  // التحكم التفاعلي في شاشة الكاد
   let cadZoom = 1;
   let cadPanX = 0;
   let cadPanY = 0;
@@ -66,69 +62,117 @@
   }
 
   /* ============================================================================
-     محرك التصنيف الهندسي الذكي للأكواد المساحية (MNH، إنارة، أشجار، طرق، شمال/جنوب)
+     محرك التصنيف الدقيق: يعتمد أولاً على الكود الأساسي للنقطة (CODE) لمنع تداخل EG مع MNH
      ============================================================================ */
   function classifySurveyCode(rawCode, extraText = "") {
-    const combined = `${String(rawCode || "")} ${String(extraText || "")}`.trim().toUpperCase();
+    const primary = String(rawCode || "").trim().toUpperCase();
+    const extra = String(extraText || "").trim().toUpperCase();
 
-    if (!combined || combined === "----" || combined === "-") {
-      return { group: "OTHER", labelAr: "نقطة عامة", layer: "GD_GENERAL", color: "#94a3b8", dxfColor: 7, symbol: "DOT" };
+    // 1. الأولوية الأولى: فحص الكود الأساسي للنقطة (CODE) مباشرة
+    if (primary && primary !== "----" && primary !== "-") {
+      // أ) الأرض الطبيعية والروبيرات (EG / NGL / BM) — تُفصل فوراً ولا تدخل مع المطابق
+      if (/^(EG|NGL|GROUND|SPOT|BM|TBM|CP|GPS)$/.test(primary) || /^(EG|NGL)\b/.test(primary)) {
+        const isBm = /^(BM|TBM|CP)$/.test(primary);
+        return {
+          group: "NGL",
+          labelAr: isBm ? "نقطة روبير (BM)" : "أرض طبيعية (EG)",
+          layer: isBm ? "GD_BENCHMARKS" : "GD_NGL_EG",
+          color: "#34d399",
+          dxfColor: 3,
+          symbol: isBm ? "TRIANGLE" : "DOT"
+        };
+      }
+
+      // ب) المطابق وغرف الصرف الصحي (MNH / MH / SAN / SEW / IC / CB / MANHOLE)
+      if (/^(MNH|MH|SAN|SEW|SEWER|IC|CB|GR|GULLY|PIT|MANHOLE|PIPE)$/.test(primary) || /\b(MNH|MH|MANHOLE|IC|CB)\b/.test(primary)) {
+        return {
+          group: "SEWER",
+          labelAr: "مطبق / صرف صحي (MNH)",
+          layer: "GD_SEWER_MNH",
+          color: "#fb923c",
+          dxfColor: 30,
+          symbol: "MANHOLE"
+        };
+      }
+
+      // ج) أعمدة الإنارة والكهرباء (LP / POLE / LIGHT / EL)
+      if (/^(LP|LIGHT|POLE|LAMP|EL|ELEC|TR|CAB)$/.test(primary) || /\b(LP|LIGHT|POLE)\b/.test(primary)) {
+        return {
+          group: "LIGHT",
+          labelAr: "عمود إنارة (LP)",
+          layer: "GD_LIGHT_POLES",
+          color: "#facc15",
+          dxfColor: 2,
+          symbol: "LIGHT"
+        };
+      }
+
+      // د) الأشجار والنخيل (TREE / PALM / SHRUB)
+      if (/^(TREE|TR|PALM|SHRUB|GRN|GREEN|PLANT|VEG)$/.test(primary) || /\b(TREE|PALM)\b/.test(primary)) {
+        return {
+          group: "TREES",
+          labelAr: "أشجار / نخيل (TREE)",
+          layer: "GD_TREES",
+          color: "#22c55e",
+          dxfColor: 3,
+          symbol: "TREE"
+        };
+      }
+
+      // هـ) الطرق والأرصفة (RD / CL / EP / CURB)
+      if (/^(RD|ROAD|CL|EP|EDGE|CURB|KERB|SW|ASPH|PAV)$/.test(primary) || /\b(RD|ROAD|CURB|ASPH)\b/.test(primary)) {
+        return {
+          group: "ROAD",
+          labelAr: "طريق / رصيف (RD)",
+          layer: "GD_ROADS",
+          color: "#60a5fa",
+          dxfColor: 5,
+          symbol: "DOT"
+        };
+      }
+
+      // و) اتجاهات الشمال والجنوب
+      if (/^(N|S|NORTH|SOUTH|NE|NW|SE|SW)$/.test(primary)) {
+        const isSouth = /^(S|SOUTH|SE|SW)$/.test(primary);
+        return {
+          group: "DIR",
+          labelAr: isSouth ? "اتجاه جنوب (South)" : "اتجاه شمال (North)",
+          layer: isSouth ? "GD_DIR_SOUTH" : "GD_DIR_NORTH",
+          color: isSouth ? "#f43f5e" : "#38bdf8",
+          dxfColor: isSouth ? 1 : 4,
+          symbol: "DIR"
+        };
+      }
+
+      return {
+        group: "OTHER",
+        labelAr: `كود (${rawCode})`,
+        layer: `GD_${String(rawCode).replace(/[^a-zA-Z0-9_]/g, "_")}`,
+        color: "#e09f24",
+        dxfColor: 7,
+        symbol: "DOT"
+      };
     }
 
-    // 1. الصرف الصحي والمطابق (MNH / SAN / SEW / MH / IC / CB)
-    if (/\b(MNH|MH|SAN|SEW|SEWER|IC|CB|GR|GULLY|PIT|MANHOLE|PIPE)\b/.test(combined) || /مطبق|صرف|غرفة|بالوعة/.test(combined)) {
-      return { group: "SEWER", labelAr: "صرف صحي / مطبق (MNH)", layer: "GD_SEWER_MNH", color: "#fb923c", dxfColor: 30, symbol: "MANHOLE" };
+    // 2. إذا كان عمود الكود الأساسي فارغاً، نبحث في الأعمدة الإضافية
+    if (/\b(MNH|MH|MANHOLE|IC|CB)\b/.test(extra)) {
+      return { group: "SEWER", labelAr: "مطبق / صرف صحي (MNH)", layer: "GD_SEWER_MNH", color: "#fb923c", dxfColor: 30, symbol: "MANHOLE" };
     }
-
-    // 2. أعمدة الإنارة والكهرباء (LP / POLE / LIGHT / EL)
-    if (/\b(LP|LIGHT|POLE|LAMP|EL|ELEC|TR|CAB|STREETLIGHT)\b/.test(combined) || /انارة|إنارة|عمود|كهرباء/.test(combined)) {
+    if (/\b(LP|LIGHT|POLE)\b/.test(extra)) {
       return { group: "LIGHT", labelAr: "عمود إنارة (LP)", layer: "GD_LIGHT_POLES", color: "#facc15", dxfColor: 2, symbol: "LIGHT" };
     }
-
-    // 3. الأشجار والنخيل والمسطحات الخضراء (TREE / PALM / SHRUB / GRN)
-    if (/\b(TREE|TR|PALM|SHRUB|GRN|GREEN|PLANT|VEG)\b/.test(combined) || /شجر|شجرة|نخل|نخيل|زراعة/.test(combined)) {
+    if (/\b(TREE|PALM)\b/.test(extra)) {
       return { group: "TREES", labelAr: "أشجار / نخيل (TREE)", layer: "GD_TREES", color: "#22c55e", dxfColor: 3, symbol: "TREE" };
     }
 
-    // 4. أكواد الشمال والجنوب والاتجاهات
-    if (/^(N|S|NORTH|SOUTH|NE|NW|SE|SW|N-E|N-W|S-E|S-W)$/.test(combined.split(/\s+/)[0]) || /شمال|جنوب/.test(combined)) {
-      const isSouth = /^(S|SOUTH|SE|SW|S-E|S-W)/.test(combined) || /جنوب/.test(combined);
-      return {
-        group: "DIR",
-        labelAr: isSouth ? "اتجاه جنوب (South)" : "اتجاه شمال (North)",
-        layer: isSouth ? "GD_DIR_SOUTH" : "GD_DIR_NORTH",
-        color: isSouth ? "#f43f5e" : "#38bdf8",
-        dxfColor: isSouth ? 1 : 4,
-        symbol: "DIR"
-      };
-    }
-
-    // 5. الطرق والأرصفة (RD / CL / EP / CURB)
-    if (/\b(RD|ROAD|CL|EP|EDGE|CURB|KERB|SW|ASPH|PAV)\b/.test(combined) || /طريق|رصيف|اسفلت|أسفلت/.test(combined)) {
-      return { group: "ROAD", labelAr: "طريق / رصيف (RD)", layer: "GD_ROADS", color: "#60a5fa", dxfColor: 5, symbol: "DOT" };
-    }
-
-    // 6. الأرض الطبيعية والروبيرات (EG / NGL / BM)
-    if (/\b(EG|NGL|GROUND|SPOT|BM|TBM|CP|GPS)\b/.test(combined) || /روبير|ارض|أرض|طبيعية/.test(combined)) {
-      const isBm = /\b(BM|TBM|CP)\b/.test(combined) || /روبير/.test(combined);
-      return {
-        group: "NGL",
-        labelAr: isBm ? "نقطة روبير (BM)" : "أرض طبيعية (EG)",
-        layer: isBm ? "GD_BENCHMARKS" : "GD_NGL_EG",
-        color: "#34d399",
-        dxfColor: 3,
-        symbol: isBm ? "TRIANGLE" : "DOT"
-      };
-    }
-
-    return { group: "OTHER", labelAr: `كود (${rawCode})`, layer: `GD_${String(rawCode).replace(/[^a-zA-Z0-9_]/g, "_")}`, color: "#e09f24", dxfColor: 7, symbol: "DOT" };
+    return { group: "OTHER", labelAr: "نقطة عامة", layer: "GD_GENERAL", color: "#94a3b8", dxfColor: 7, symbol: "DOT" };
   }
 
   function getRowClassification(rowObj) {
     const { cKey } = getCoordKeys();
     const codeVal = cKey ? rowObj[cKey] : "";
     const extraVals = Object.entries(rowObj)
-      .filter(([k]) => !/^(p|e|n|z|east|north|level|id|no)$/i.test(k.trim()))
+      .filter(([k]) => !/^(p|e|n|z|east|north|norht|level|id|no|code)$/i.test(k.trim()))
       .map(([, v]) => v)
       .join(" ");
     return classifySurveyCode(codeVal, extraVals);
@@ -236,9 +280,6 @@
     };
   }
 
-  /* ============================================================================
-     نظام السمات الثلاث (Themes) + التنسيقات الهندسية الرسمية
-     ============================================================================ */
   function injectStyles() {
     const old = document.getElementById("gdAiExcelStyles");
     if (old) old.remove();
@@ -246,7 +287,6 @@
     const style = document.createElement("style");
     style.id = "gdAiExcelStyles";
     style.textContent = `
-      /* تعريف المتغيرات للسمات الثلاث */
       #gdAiExcelStudio[data-theme="dark_gold"] {
         --ex-bg: linear-gradient(165deg, #141210, #1e1b18);
         --ex-panel: #100e0c;
@@ -321,7 +361,6 @@
         max-width: 980px;
         color: var(--ex-text);
         box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
-        transition: background 0.25s ease, color 0.25s ease;
       }
       .gd-ex-top-bar {
         display: flex;
@@ -344,11 +383,7 @@
       }
       .gd-ex-top-bar p { margin: 4px 0 0; font-size: 12px; color: var(--ex-muted); }
 
-      .gd-ex-header-actions {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-      }
+      .gd-ex-header-actions { display: flex; align-items: center; gap: 8px; }
       .gd-theme-bulb-btn {
         display: inline-flex;
         align-items: center;
@@ -372,7 +407,6 @@
         border-radius: 999px;
       }
 
-      /* شريط الذكاء الاصطناعي */
       .gd-ex-ai-panel {
         background: var(--ex-panel);
         border: 1.5px solid var(--ex-border);
@@ -430,7 +464,6 @@
         line-height: 1.6;
       }
 
-      /* شريط فلترة الأكواد الذكي */
       .gd-ex-code-filters {
         display: flex;
         flex-wrap: wrap;
@@ -591,7 +624,6 @@
         direction: ltr;
       }
 
-      /* شاشة المعاينة CAD */
       .gd-ex-canvas-box {
         background: #06080d;
         border: 1.5px solid var(--ex-border);
@@ -641,7 +673,6 @@
         font-family: inherit;
       }
 
-      /* مركز التصدير الاحترافي بخيارين رئيسيين */
       .gd-export-hub {
         background: var(--ex-panel);
         border: 1.5px solid var(--ex-border);
@@ -733,11 +764,10 @@
             </svg>
             <span id="gdThemeBulbLabel">${getThemeLabel(currentTheme)}</span>
           </button>
-          <span class="gd-ex-pro-pill">${logged ? "ENTERPRISE V6" : "وضع المعاينة"}</span>
+          <span class="gd-ex-pro-pill">${logged ? "ENTERPRISE V6.1" : "وضع المعاينة"}</span>
         </div>
       </div>
 
-      <!-- شريط أوامر الذكاء الاصطناعي -->
       <div class="gd-ex-ai-panel">
         <div class="gd-ex-ai-row">
           <input type="text" id="gdExcelAiPrompt" class="gd-ex-input"
@@ -745,7 +775,7 @@
           <button type="button" id="gdExcelAiExecBtn" class="gd-ex-ai-btn">تنفيذ الأمر</button>
         </div>
         <div class="gd-ex-chips">
-          <button type="button" class="gd-ex-chip" data-ai-cmd="صنف الأكواد المساحية تلقائياً">◈ تصنيف الأكواد (MNH / إنارة / أشجار)</button>
+          <button type="button" class="gd-ex-chip" data-ai-cmd="صنف الأكواد المساحية تلقائياً">◈ تصنيف الأكواد (MNH / إنارة / EG)</button>
           <button type="button" class="gd-ex-chip" data-ai-cmd="افحص أخطاء الرفع المساحي">◈ فحص الجودة (QA/QC)</button>
           <button type="button" class="gd-ex-chip" data-ai-cmd="احسب المسافة والانحراف">◈ المسافة والانحراف</button>
           <button type="button" class="gd-ex-chip" data-ai-cmd="احسب المساحة والمحيط">◈ المساحة بالفدان والمتر</button>
@@ -754,12 +784,11 @@
         </div>
         <div id="gdExcelAiLog">
           ${logged
-            ? "النظام جاهز: ارفع ملفات (Excel / DXF / SDR / STR / GSI / CSV) أو اختر الفئة وصيغة التصدير بالأسفل."
+            ? "النظام جاهز: يتم فصل مطابق MNH الصافية عن نقاط الأرض الطبيعية EG تلقائياً."
             : "وضع المعاينة للزوار: يمكنك رفع الملفات ومعاينة النقاط على لوحة الكاد مجاناً. سجّل الدخول لتفعيل الحفظ والتصدير."}
         </div>
       </div>
 
-      <!-- شريط الاستيراد والأدوات -->
       <div class="gd-ex-toolbar">
         <label class="gd-ex-btn gold" style="cursor:pointer;">
           ⊞ استيراد ملف (Excel / DXF / SDR / STR / GSI / CSV)
@@ -772,10 +801,8 @@
         <button type="button" class="gd-ex-btn danger" id="gdExClearBtn">✕ تفريغ الجدول</button>
       </div>
 
-      <!-- شريط الفلترة الذكية حسب نوع الكود -->
       <div class="gd-ex-code-filters" id="gdExCodeFilterBar"></div>
 
-      <!-- تبويبات بيئة العمل -->
       <div class="gd-ex-mode-tabs">
         <button type="button" class="gd-ex-mode-tab active" data-ex-subtab="grid">▤ جدول الإكسيل والبيانات</button>
         <button type="button" class="gd-ex-mode-tab" data-ex-subtab="cad_import">⬡ استخراج من AutoCAD LIST</button>
@@ -812,18 +839,15 @@
         </div>
       </div>
 
-      <!-- الإحصائيات المساحية الحية -->
       <div class="gd-ex-stats" id="gdExStatsBar"></div>
 
-      <!-- جدول الإكسيل -->
       <div class="gd-ex-grid-wrap">
         <table class="gd-ex-table" id="gdExcelDataTable"></table>
       </div>
 
-      <!-- شاشة المعاينة الهندسية التفاعلية -->
       <div class="gd-ex-canvas-box">
         <div class="gd-ex-canvas-head">
-          <span>معاينة CAD بالرموز الهندسية (صرف MNH • إنارة LP • أشجار TREE • روبير BM)</span>
+          <span>معاينة CAD بالرموز الهندسية (مطابق MNH • إنارة LP • أرض طبيعية EG • أشجار TREE)</span>
           <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
             <input type="text" id="gdExSearchInput" class="gd-ex-input" style="max-width:110px;padding:4px 8px;font-size:11px;" placeholder="بحث...">
             <button type="button" class="gd-ex-btn" style="padding:4px 8px;font-size:11px;" id="gdToggleLabelsBtn">النصوص</button>
@@ -845,7 +869,6 @@
         </div>
       </div>
 
-      <!-- مركز التصدير الاحترافي بخيارين رئيسيين -->
       <div class="gd-export-hub">
         <div class="gd-export-hub-title">▣ مركز التصدير والحفظ الاحترافي (Civil 3D / AutoCAD / Total Station / GIS)</div>
 
@@ -866,10 +889,11 @@
             <select id="gdExportTargetScopeSelect">
               <option value="ALL" selected>تصدير كافة النقاط في الجدول (All Points)</option>
               <option value="FILTERED">تصدير النقاط المفلترة الظاهرة حالياً فقط</option>
+              <option value="SEWER">تصدير نقاط المطابق والصرف الصحي الصافية فقط (MNH / SAN)</option>
+              <option value="NGL">تصدير نقاط الأرض الطبيعية فقط (EG / NGL)</option>
               <option value="LIGHT">تصدير نقاط أعمدة الإنارة فقط (LP / Light Poles)</option>
-              <option value="SEWER">تصدير نقاط الصرف الصحي والمطابق فقط (MNH / SAN)</option>
               <option value="TREES">تصدير نقاط الأشجار واللاندسكيب فقط (TREE / PALM)</option>
-              <option value="NGL_ROAD">تصدير نقاط الأرض الطبيعية والطرق فقط (EG / RD)</option>
+              <option value="ROAD">تصدير نقاط الطرق والأرصفة فقط (RD)</option>
             </select>
           </div>
         </div>
@@ -1046,9 +1070,6 @@
     return { lat: (lat * 180) / Math.PI, lon: (lon * 180) / Math.PI };
   }
 
-  /* ============================================================================
-     استيراد الملفات (Excel, DXF, SDR, STR, CDR, GSI, CSV, TXT)
-     ============================================================================ */
   function parseDxfContent(dxfText) {
     const lines = dxfText.split(/\r?\n/).map(l => l.trim());
     const extracted = [];
@@ -1151,7 +1172,7 @@
             resetCadView();
             renderExcelTable();
             showExcelLog(
-              `تم استيراد ${rows.length} نقطة وتصنيفها تلقائياً: (${st.sewerCount} صرف MNH | ${st.lightCount} إنارة | ${st.treeCount} أشجار | ${st.nglCount} أرض طبيعية).`,
+              `تم استيراد ${rows.length} نقطة وتصنيفها بدقة: (${st.sewerCount} مطبق MNH صافي | ${st.nglCount} أرض طبيعية EG | ${st.lightCount} إنارة | ${st.treeCount} أشجار).`,
               "success"
             );
           } catch (err) {
@@ -1254,9 +1275,6 @@
     reader.readAsText(file);
   }
 
-  /* ============================================================================
-     تجهيز النقاط للتصدير حسب الاختيارين: (صيغة الأعمدة + فئة النقاط)
-     ============================================================================ */
   function getRowsForExportScope() {
     const scope = document.getElementById("gdExportTargetScopeSelect")?.value || exportTargetScope;
     if (scope === "FILTERED") {
@@ -1268,15 +1286,15 @@
       const cls = getRowClassification(r);
       if (scope === "LIGHT") return cls.group === "LIGHT";
       if (scope === "SEWER") return cls.group === "SEWER";
+      if (scope === "NGL") return cls.group === "NGL";
       if (scope === "TREES") return cls.group === "TREES";
-      if (scope === "NGL_ROAD") return cls.group === "NGL" || cls.group === "ROAD";
+      if (scope === "ROAD") return cls.group === "ROAD";
       return true;
     });
   }
 
   function formatPointTuple(rowObj, idx, orderMode) {
     const { pKey, eKey, nKey, zKey, cKey } = getCoordKeys();
-    // تنظيف رقم النقطة والوصف من أي رموز قد تربك Civil 3D
     const rawP = rowObj[pKey] !== undefined && String(rowObj[pKey]).trim() !== "" ? String(rowObj[pKey]).trim() : String(idx + 1);
     const p = rawP.replace(/[^\w\-.]/g, "") || String(idx + 1);
     const eNum = parseFloat(rowObj[eKey]);
@@ -1294,7 +1312,7 @@
     if (orderMode === "PNEZD") return [p, n, e, z, d];
     if (orderMode === "PEN") return [p, e, n];
     if (orderMode === "PNE") return [p, n, e];
-    return [p, e, n, z, d]; // PENZD الافتراضي المعتمد في Civil 3D
+    return [p, e, n, z, d];
   }
 
   function downloadBlob(content, filename, mime) {
@@ -1371,20 +1389,17 @@
 
     const { pKey, eKey, nKey, zKey, cKey } = getCoordKeys();
 
-    // 1. تصدير Civil 3D CSV نظيف 100% بدون BOM (يحل خطأ Point Style والاستيراد في Civil 3D)
     if (format === "civil3d_csv") {
       const lines = [];
       targetRows.forEach((r, idx) => {
         const tuple = formatPointTuple(r, idx, orderMode);
         if (tuple) lines.push(tuple.join(","));
       });
-      // بدون \uFEFF نهائياً حتى يقرأه Civil 3D فوراً بدون أي أخطاء
       downloadBlob(lines.join("\r\n") + "\r\n", `GeoDev_Civil3D_${orderMode}_${scopeMode}_${Date.now()}.csv`, "text/csv;charset=ascii;");
-      showExcelLog(`تم تصدير ${lines.length} نقطة بصيغة Civil 3D (${orderMode}) بدون BOM — جاهزة للاستيراد بالـ Point Style مباشرة.`, "success");
+      showExcelLog(`تم تصدير ${lines.length} نقطة صافية بصيغة Civil 3D (${orderMode}) بدون BOM.`, "success");
       return;
     }
 
-    // 2. تصدير ملف نصي قياسي (.txt)
     if (format === "plain_txt") {
       const lines = [];
       targetRows.forEach((r, idx) => {
@@ -1396,14 +1411,12 @@
       return;
     }
 
-    // 3. تصدير ملف Excel نظيف (.xlsx) يبدأ من النقطة 1 مباشرة حسب الترتيب المختار
     if (format === "xlsx_clean") {
       ensureSheetJS(() => {
         const aoaData = [];
         targetRows.forEach((r, idx) => {
           const tuple = formatPointTuple(r, idx, orderMode);
           if (!tuple) return;
-          // تحويل الإحداثيات لأرقام حقيقية داخل الإكسيل
           const numericRow = tuple.map((val, colIdx) => {
             if (colIdx === 0) return val;
             if (orderMode.endsWith("D") && colIdx === tuple.length - 1) return val;
@@ -1421,7 +1434,6 @@
       return;
     }
 
-    // 4. تصدير لوحة AutoCAD DXF (.dxf)
     if (format === "dxf") {
       const dxfStr = buildDxfString(targetRows);
       downloadBlob(dxfStr, `GeoDev_AutoCAD_${scopeMode}_${Date.now()}.dxf`, "application/dxf");
@@ -1429,17 +1441,12 @@
       return;
     }
 
-    // 5. تصدير حزمة AutoCAD DWG (ملف DXF + سكريبت حفظ تلقائي DWG)
     if (format === "dwg_bundle") {
       const dxfStr = buildDxfString(targetRows);
       const stamp = Date.now();
       downloadBlob(dxfStr, `GeoDev_DWG_Source_${stamp}.dxf`, "application/dxf");
 
-      const scrLines = [
-        "_OSMODE 0",
-        "_PDMODE 34",
-        "_PDSIZE 0.5"
-      ];
+      const scrLines = ["_OSMODE 0", "_PDMODE 34", "_PDSIZE 0.5"];
       targetRows.forEach((r, idx) => {
         const e = parseFloat(r[eKey]);
         const n = parseFloat(r[nKey]);
@@ -1460,7 +1467,6 @@
       return;
     }
 
-    // 6. تصدير Sokkia STR / SDR للتوتال ستيشن
     if (format === "str" || format === "sdr") {
       const extName = format === "str" ? "str" : "sdr";
       const sdrLines = ["00NMSDR33 V04-04.02  GEODEV STAKEOUT"];
@@ -1477,7 +1483,6 @@
       return;
     }
 
-    // 7. تصدير Leica GSI
     if (format === "gsi") {
       const gsiLines = targetRows.map((r, idx) => {
         const p = String(r[pKey] || idx + 1).padStart(16, "0");
@@ -1492,7 +1497,6 @@
       return;
     }
 
-    // 8. تصدير Surfer DAT
     if (format === "surfer") {
       const datLines = ["Easting,Northing,Elevation,PointID,Code"];
       targetRows.forEach((r, idx) => {
@@ -1508,7 +1512,6 @@
       return;
     }
 
-    // 9. تصدير ArcGIS Pro WKT CSV
     if (format === "wkt") {
       const wktHeader = [...columns, "AI_Category", "CAD_Layer", "GEOMETRY_WKT"].join(",");
       const wktRows = targetRows.map(r => {
@@ -1525,7 +1528,6 @@
       return;
     }
 
-    // 10. تصدير ArcGIS Pro / QGIS GeoJSON
     if (format === "geojson") {
       const features = targetRows
         .map(r => {
@@ -1550,7 +1552,6 @@
       return;
     }
 
-    // 11. تصدير Google Earth KML
     if (format === "kml") {
       const marks = targetRows
         .map((r, idx) => {
@@ -1569,9 +1570,6 @@
     }
   }
 
-  /* ============================================================================
-     محرك الأوامر الذكية
-     ============================================================================ */
   function runAutoCodeClassification() {
     saveSnapshot();
     if (!columns.includes("التصنيف_الهندسي")) columns.push("التصنيف_الهندسي");
@@ -1587,7 +1585,7 @@
     renderExcelTable();
     drawCadPreview();
     showExcelLog(
-      `تم تصنيف النقاط هندسياً: [${st.sewerCount} صرف MNH] • [${st.lightCount} إنارة] • [${st.treeCount} أشجار] • [${st.nglCount} أرض طبيعية] • [${st.roadCount} طرق].`,
+      `تم تصنيف النقاط بدقة: [${st.sewerCount} مطبق MNH صافي] • [${st.nglCount} أرض طبيعية EG] • [${st.lightCount} إنارة] • [${st.treeCount} أشجار].`,
       "success"
     );
   }
@@ -1745,9 +1743,6 @@
     showExcelLog(`أدخل أمراً مثل: "صنف الأكواد تلقائياً" أو "افحص أخطاء الرفع" أو "اجمع 0.50 على Z" أو "احسب المساحة".`, "info");
   }
 
-  /* ============================================================================
-     رسم الجدول وشاشة CAD Canvas بالرموز الهندسية الحقيقية
-     ============================================================================ */
   function getFilteredRowsWithIndex() {
     const q = searchFilter.trim().toLowerCase();
     return rows
@@ -1769,10 +1764,10 @@
     if (statsBar) {
       statsBar.innerHTML = `
         <div class="gd-ex-stat"><span>إجمالي النقاط</span><strong>${st.count}</strong></div>
-        <div class="gd-ex-stat"><span>صرف صحي (MNH)</span><strong style="color:#fb923c;">${st.sewerCount}</strong></div>
+        <div class="gd-ex-stat"><span>مطابق MNH صافي</span><strong style="color:#fb923c;">${st.sewerCount}</strong></div>
+        <div class="gd-ex-stat"><span>أرض طبيعية (EG)</span><strong style="color:#10b981;">${st.nglCount}</strong></div>
         <div class="gd-ex-stat"><span>أعمدة إنارة (LP)</span><strong style="color:#eab308;">${st.lightCount}</strong></div>
         <div class="gd-ex-stat"><span>أشجار (TREE)</span><strong style="color:#22c55e;">${st.treeCount}</strong></div>
-        <div class="gd-ex-stat"><span>أرض طبيعية (EG)</span><strong style="color:#10b981;">${st.nglCount}</strong></div>
         <div class="gd-ex-stat"><span>المساحة المغلقة</span><strong>${st.areaM2.toFixed(1)} م²</strong></div>
       `;
     }
@@ -1780,10 +1775,10 @@
     if (filterBar) {
       const filters = [
         { id: "ALL", label: `الكل (${st.count})` },
+        { id: "SEWER", label: `المطابق والصرف MNH (${st.sewerCount})` },
+        { id: "NGL", label: `الأرض الطبيعية EG (${st.nglCount})` },
         { id: "LIGHT", label: `أعمدة الإنارة (${st.lightCount})` },
-        { id: "SEWER", label: `الصرف والمطابق MNH (${st.sewerCount})` },
         { id: "TREES", label: `الأشجار (${st.treeCount})` },
-        { id: "NGL", label: `أرض طبيعية EG (${st.nglCount})` },
         { id: "ROAD", label: `طرق وأرصفة (${st.roadCount})` },
         { id: "DIR", label: `شمال / جنوب (${st.dirCount})` }
       ];
@@ -2056,9 +2051,6 @@
     });
   }
 
-  /* ============================================================================
-     ربط المساعد الرئيسي للمنصة لتوجيه المستخدمين لقسم المساحة ومحطة الإكسيل
-     ============================================================================ */
   function setupMainAssistantRouter() {
     document.addEventListener("click", e => {
       const sendBtn = e.target.closest("#sendBtn, .send-btn, button[type='submit']");
@@ -2093,7 +2085,7 @@
               توجيه من مساعد GeoDev الهندسي
             </strong>
             <p style="margin:0 0 10px;font-size:12.5px;color:#e7e5e4;line-height:1.65;">
-              لإنشاء أو تعديل ملفات الإكسيل المساحية (<b>PENZD / PENZ</b>) وتصنيف نقاط أعمدة الإنارة والصرف الصحي <b>MNH</b> والتصدير المباشر لـ <b>Civil 3D</b> و <b>AutoCAD</b> والتوتال ستيشن، يرجى التوجه إلى <b>قسم المساحة — محطة إكسيل المساحة</b>:
+              لإنشاء أو تعديل ملفات الإكسيل المساحية (<b>PENZD / PENZ</b>) وتصنيف نقاط أعمدة الإنارة والصرف الصحي <b>MNH</b> والتصدير المباشر لـ <b>Civil 3D</b> و <b>AutoCAD</b>، يرجى التوجه إلى <b>قسم المساحة — محطة إكسيل المساحة</b>:
             </p>
             <button type="button" id="gdJumpToSurvExcelBtn"
               style="padding:9px 15px;border-radius:9px;border:0;background:linear-gradient(135deg,#e09f24,#b45309);color:#141210;font-weight:900;font-size:12.5px;cursor:pointer;font-family:inherit;">
@@ -2201,7 +2193,6 @@
 
   function bindEvents() {
     document.addEventListener("click", e => {
-      // زر المصباح لتبديل السمات الثلاث (Themes)
       if (e.target.closest("#gdCycleThemeBulbBtn")) {
         const order = ["dark_gold", "light_eng", "cad_blue"];
         const nextIdx = (order.indexOf(currentTheme) + 1) % order.length;
@@ -2235,7 +2226,6 @@
         return;
       }
 
-      // فلترة الفئات (إنارة / صرف MNH / أشجار / طرق...) وتحديث نطاق التصدير تلقائياً
       const filterBtn = e.target.closest("[data-code-filter]");
       if (filterBtn) {
         activeCodeFilter = filterBtn.dataset.codeFilter;
@@ -2243,7 +2233,9 @@
         if (scopeSel) {
           if (activeCodeFilter === "LIGHT") scopeSel.value = "LIGHT";
           else if (activeCodeFilter === "SEWER") scopeSel.value = "SEWER";
+          else if (activeCodeFilter === "NGL") scopeSel.value = "NGL";
           else if (activeCodeFilter === "TREES") scopeSel.value = "TREES";
+          else if (activeCodeFilter === "ROAD") scopeSel.value = "ROAD";
           else if (activeCodeFilter === "ALL") scopeSel.value = "ALL";
           else scopeSel.value = "FILTERED";
         }
