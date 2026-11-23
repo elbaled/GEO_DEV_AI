@@ -1,14 +1,15 @@
 /* ============================================================================
-   GeoDev AI Survey & GIS Excel Workstation (V5.0 ULTRA PRO)
-   - محرك ذكاء اصطناعي للتعرف التلقائي على أكواد المساحة (MNH, الصرف الصحي, أعمدة الإنارة, الشمال والجنوب, EG, RD)
-   - رسم رموز هندسية حقيقية في الكاد وتصدير DXF مقسم إلى طبقات ملونة تلقائياً
-   - التوصيل الذكي للخطوط حسب الكود + فحص أخطاء الرفع المساحي QA/QC
-   - معاينة مجانية للزوار قبل تسجيل الدخول + حماية الحفظ والتصدير والـ AI
+   GeoDev Survey & GIS Excel Workstation (V6.0 ENTERPRISE)
+   - تصدير Civil 3D بدون BOM (يعمل فوراً على PENZD / PENZ / PNEZD بلا أخطاء)
+   - مركز تصدير متكامل: اختيار الترتيب (PENZD/PENZ/PNEZD/PEN) + اختيار الفئة (الكل/إنارة/صرف MNH/أشجار/طرق)
+   - دعم صيغ: Civil 3D CSV, TXT, AutoCAD DXF & DWG Auto-Save Script, Sokkia SDR & STR, Leica GSI, Surfer DAT, ArcGIS/QGIS, XLSX
+   - 3 سمات احترافية (Dark Gold / Engineering Light / CAD Blueprint) عبر زر المصباح
+   - توجيه تلقائي من المساعد الرئيسي للمنصة عند طلب أدوات الإكسيل أو التحويل المساحي
    ============================================================================ */
 (function () {
   "use strict";
-  if (window.GeoDevAIExcelV5Init) return;
-  window.GeoDevAIExcelV5Init = true;
+  if (window.GeoDevAIExcelV6Init) return;
+  window.GeoDevAIExcelV6Init = true;
 
   function ensureSheetJS(callback) {
     if (window.XLSX) {
@@ -27,20 +28,25 @@
     { P: "2", E: 312475.840, N: 3110225.180, Z: 24.680, Code: "MNH" },
     { P: "3", E: 312510.300, N: 3110205.900, Z: 24.820, Code: "MNH" },
     { P: "4", E: 312495.600, N: 3110175.400, Z: 24.390, Code: "LP" },
-    { P: "5", E: 312455.200, N: 3110180.100, Z: 24.450, Code: "EG" },
-    { P: "6", E: 312465.000, N: 3110235.000, Z: 24.700, Code: "NORTH" }
+    { P: "5", E: 312480.150, N: 3110190.250, Z: 24.420, Code: "TREE" },
+    { P: "6", E: 312455.200, N: 3110180.100, Z: 24.450, Code: "EG" }
   ];
 
   let historyStack = [];
   let activeSubTab = "grid";
-  let activeCodeFilter = "ALL"; // ALL | SEWER | LIGHT | DIR | NGL | ROAD
+  let activeCodeFilter = "ALL"; // ALL | SEWER | LIGHT | TREES | NGL | ROAD | DIR
+  let currentTheme = localStorage.getItem("gd_excel_theme_v6") || "dark_gold"; // dark_gold | light_eng | cad_blue
   let crsMode = "UTM36N";
   let showLabelsOnCanvas = true;
-  let connectMode = "BY_CODE"; // "BY_CODE" | "SEQUENTIAL" | "NONE"
+  let connectMode = "BY_CODE";
   let searchFilter = "";
   let isLoggedInUser = false;
 
-  // متغيرات التحكم التفاعلي في شاشة الكاد (Zoom & Pan)
+  // إعدادات مركز التصدير الموحد
+  let exportColOrder = "PENZD"; // PENZD | PENZ | PNEZD | PEN | PNE
+  let exportTargetScope = "ALL"; // ALL | FILTERED | SEWER | LIGHT | TREES | NGL_ROAD
+
+  // التحكم التفاعلي في شاشة الكاد
   let cadZoom = 1;
   let cadPanX = 0;
   let cadPanY = 0;
@@ -60,31 +66,36 @@
   }
 
   /* ============================================================================
-     محرك التصنيف الهندسي الذكي للأكواد المساحية (MNH, الصرف, الإنارة, الشمال/الجنوب)
+     محرك التصنيف الهندسي الذكي للأكواد المساحية (MNH، إنارة، أشجار، طرق، شمال/جنوب)
      ============================================================================ */
   function classifySurveyCode(rawCode, extraText = "") {
     const combined = `${String(rawCode || "")} ${String(extraText || "")}`.trim().toUpperCase();
 
     if (!combined || combined === "----" || combined === "-") {
-      return { group: "OTHER", labelAr: "بدون كود", layer: "GD_GENERAL", color: "#94a3b8", dxfColor: 7, symbol: "DOT" };
+      return { group: "OTHER", labelAr: "نقطة عامة", layer: "GD_GENERAL", color: "#94a3b8", dxfColor: 7, symbol: "DOT" };
     }
 
-    // 1. مطابق وغرف الصرف الصحي (MNH / SAN / SEW / MH / IC / CB / GR)
+    // 1. الصرف الصحي والمطابق (MNH / SAN / SEW / MH / IC / CB)
     if (/\b(MNH|MH|SAN|SEW|SEWER|IC|CB|GR|GULLY|PIT|MANHOLE|PIPE)\b/.test(combined) || /مطبق|صرف|غرفة|بالوعة/.test(combined)) {
-      return { group: "SEWER", labelAr: "مطبق / صرف صحي (MNH)", layer: "GD_SEWER_MNH", color: "#fb923c", dxfColor: 30, symbol: "MANHOLE" };
+      return { group: "SEWER", labelAr: "صرف صحي / مطبق (MNH)", layer: "GD_SEWER_MNH", color: "#fb923c", dxfColor: 30, symbol: "MANHOLE" };
     }
 
     // 2. أعمدة الإنارة والكهرباء (LP / POLE / LIGHT / EL)
     if (/\b(LP|LIGHT|POLE|LAMP|EL|ELEC|TR|CAB|STREETLIGHT)\b/.test(combined) || /انارة|إنارة|عمود|كهرباء/.test(combined)) {
-      return { group: "LIGHT", labelAr: "عمود إنارة / كهرباء", layer: "GD_LIGHT_POLES", color: "#facc15", dxfColor: 2, symbol: "LIGHT" };
+      return { group: "LIGHT", labelAr: "عمود إنارة (LP)", layer: "GD_LIGHT_POLES", color: "#facc15", dxfColor: 2, symbol: "LIGHT" };
     }
 
-    // 3. أكواد الشمال والجنوب والاتجاهات (N / S / NORTH / SOUTH / NE / NW / SE / SW)
+    // 3. الأشجار والنخيل والمسطحات الخضراء (TREE / PALM / SHRUB / GRN)
+    if (/\b(TREE|TR|PALM|SHRUB|GRN|GREEN|PLANT|VEG)\b/.test(combined) || /شجر|شجرة|نخل|نخيل|زراعة/.test(combined)) {
+      return { group: "TREES", labelAr: "أشجار / نخيل (TREE)", layer: "GD_TREES", color: "#22c55e", dxfColor: 3, symbol: "TREE" };
+    }
+
+    // 4. أكواد الشمال والجنوب والاتجاهات
     if (/^(N|S|NORTH|SOUTH|NE|NW|SE|SW|N-E|N-W|S-E|S-W)$/.test(combined.split(/\s+/)[0]) || /شمال|جنوب/.test(combined)) {
       const isSouth = /^(S|SOUTH|SE|SW|S-E|S-W)/.test(combined) || /جنوب/.test(combined);
       return {
         group: "DIR",
-        labelAr: isSouth ? "اتجاه / حد جنوب (South)" : "اتجاه / حد شمال (North)",
+        labelAr: isSouth ? "اتجاه جنوب (South)" : "اتجاه شمال (North)",
         layer: isSouth ? "GD_DIR_SOUTH" : "GD_DIR_NORTH",
         color: isSouth ? "#f43f5e" : "#38bdf8",
         dxfColor: isSouth ? 1 : 4,
@@ -92,30 +103,25 @@
       };
     }
 
-    // 4. الطرق والأرصفة والأسفلت (RD / CL / EP / CURB / ASPH)
+    // 5. الطرق والأرصفة (RD / CL / EP / CURB)
     if (/\b(RD|ROAD|CL|EP|EDGE|CURB|KERB|SW|ASPH|PAV)\b/.test(combined) || /طريق|رصيف|اسفلت|أسفلت/.test(combined)) {
-      return { group: "ROAD", labelAr: "طريق / رصيف (Road)", layer: "GD_ROADS", color: "#60a5fa", dxfColor: 5, symbol: "DOT" };
+      return { group: "ROAD", labelAr: "طريق / رصيف (RD)", layer: "GD_ROADS", color: "#60a5fa", dxfColor: 5, symbol: "DOT" };
     }
 
-    // 5. الأرض الطبيعية والروبيرات (EG / NGL / BM / TBM / SPOT)
+    // 6. الأرض الطبيعية والروبيرات (EG / NGL / BM)
     if (/\b(EG|NGL|GROUND|SPOT|BM|TBM|CP|GPS)\b/.test(combined) || /روبير|ارض|أرض|طبيعية/.test(combined)) {
       const isBm = /\b(BM|TBM|CP)\b/.test(combined) || /روبير/.test(combined);
       return {
         group: "NGL",
-        labelAr: isBm ? "نقطة روبير / ثوابت (BM)" : "أرض طبيعية (EG / NGL)",
+        labelAr: isBm ? "نقطة روبير (BM)" : "أرض طبيعية (EG)",
         layer: isBm ? "GD_BENCHMARKS" : "GD_NGL_EG",
-        color: "#4ade80",
+        color: "#34d399",
         dxfColor: 3,
         symbol: isBm ? "TRIANGLE" : "DOT"
       };
     }
 
-    // 6. مباني وأسوار (BLD / COR / WALL / FN)
-    if (/\b(BLD|BUILD|COR|CORNER|WALL|FN|FENCE|GATE)\b/.test(combined) || /مبنى|سور|ركن/.test(combined)) {
-      return { group: "BLD", labelAr: "مبنى / سور", layer: "GD_BUILDINGS", color: "#c084fc", dxfColor: 6, symbol: "SQUARE" };
-    }
-
-    return { group: "OTHER", labelAr: `كود عام (${rawCode})`, layer: `GD_${String(rawCode).replace(/[^a-zA-Z0-9_]/g, "_")}`, color: "#fbbf24", dxfColor: 7, symbol: "DOT" };
+    return { group: "OTHER", labelAr: `كود (${rawCode})`, layer: `GD_${String(rawCode).replace(/[^a-zA-Z0-9_]/g, "_")}`, color: "#e09f24", dxfColor: 7, symbol: "DOT" };
   }
 
   function getRowClassification(rowObj) {
@@ -150,22 +156,24 @@
     rows = prev.rows;
     renderExcelTable();
     drawCadPreview();
-    showExcelLog("تم التراجع عن آخر عملية بنجاح.", "success");
+    showExcelLog("تم التراجع عن آخر تعديل بنجاح.", "success");
   }
 
   function showExcelLog(msg, type = "info") {
     const box = document.getElementById("gdExcelAiLog");
     if (!box) return;
     const palette = {
-      success: { bg: "rgba(22,163,74,0.16)", border: "#22c55e", text: "#4ade80" },
-      warn: { bg: "rgba(234,179,8,0.16)", border: "#eab308", text: "#facc15" },
-      error: { bg: "rgba(220,38,38,0.16)", border: "#ef4444", text: "#f87171" },
-      info: { bg: "rgba(56,189,248,0.14)", border: "#38bdf8", text: "#38bdf8" }
+      success: { bg: "rgba(22,163,74,0.16)", border: "#22c55e", text: "#16a34a" },
+      warn: { bg: "rgba(234,179,8,0.16)", border: "#eab308", text: "#ca8a04" },
+      error: { bg: "rgba(220,38,38,0.16)", border: "#ef4444", text: "#dc2626" },
+      info: { bg: "rgba(2,132,199,0.14)", border: "#0284c7", text: "#0284c7" }
     };
+    const isDark = currentTheme !== "light_eng";
+    const darkText = { success: "#4ade80", warn: "#facc15", error: "#f87171", info: "#38bdf8" };
     const c = palette[type] || palette.info;
     box.style.background = c.bg;
     box.style.borderColor = c.border;
-    box.style.color = c.text;
+    box.style.color = isDark ? darkText[type] : c.text;
     box.textContent = msg;
   }
 
@@ -183,24 +191,24 @@
     `;
 
     overlay.innerHTML = `
-      <div style="width:100%;max-width:430px;background:#1c1917;border:2px solid #e09f24;border-radius:20px;padding:22px;color:#f5f5f4;text-align:center;box-shadow:0 24px 60px rgba(0,0,0,0.75);">
-        <div style="width:54px;height:54px;margin:0 auto 12px;border-radius:16px;background:rgba(224,159,36,0.16);border:1.5px solid #e09f24;display:grid;place-items:center;font-size:26px;">
-          🔐
+      <div style="width:100%;max-width:430px;background:#1c1917;border:2px solid #e09f24;border-radius:18px;padding:22px;color:#f5f5f4;text-align:center;box-shadow:0 24px 60px rgba(0,0,0,0.75);">
+        <div style="width:52px;height:52px;margin:0 auto 12px;border-radius:14px;background:rgba(224,159,36,0.16);border:1.5px solid #e09f24;display:grid;place-items:center;color:#fbbf24;font-weight:900;font-size:20px;">
+          ID
         </div>
-        <h3 style="margin:0 0 8px;font-size:18px;font-weight:900;color:#fbbf24;">
-          أنشئ حساباً أو سجّل الدخول للمتابعة
+        <h3 style="margin:0 0 8px;font-size:17.5px;font-weight:900;color:#fbbf24;">
+          تسجيل الدخول أو إنشاء حساب للمتابعة
         </h3>
         <p style="margin:0 0 16px;font-size:13px;color:#d6d3d1;line-height:1.75;">
-          لقد قمت بمعاينة بياناتك بنجاح! لكي تتمكن من <b>${actionLabel}</b> على منصة <b>GeoDev</b>، يرجى إنشاء حساب مجاني أو تسجيل الدخول الآن:
+          تمت معاينة بياناتك بنجاح. لكي تتمكن من <b>${actionLabel}</b> على منصة <b>GeoDev</b>، يرجى إنشاء حساب مجاني أو تسجيل الدخول:
         </p>
         <div style="display:flex;flex-direction:column;gap:9px;">
           <button type="button" id="gdGoToLoginFromExcelBtn"
-            style="width:100%;padding:13px;border-radius:12px;border:0;background:linear-gradient(135deg,#e09f24,#b45309);color:#141210;font-size:14.5px;font-weight:900;cursor:pointer;font-family:inherit;">
-            🚀 إنشاء حساب مجاني / تسجيل الدخول الآن
+            style="width:100%;padding:13px;border-radius:11px;border:0;background:linear-gradient(135deg,#e09f24,#b45309);color:#141210;font-size:14px;font-weight:900;cursor:pointer;font-family:inherit;">
+            إنشاء حساب مجاني / تسجيل الدخول
           </button>
           <button type="button" id="gdStayGuestPreviewBtn"
-            style="width:100%;padding:10px;border-radius:11px;border:1px solid #44403c;background:#292524;color:#a8a29e;font-size:12.5px;font-weight:800;cursor:pointer;font-family:inherit;">
-            متابعة المعاينة كزائر فقط
+            style="width:100%;padding:10px;border-radius:10px;border:1px solid #44403c;background:#292524;color:#a8a29e;font-size:12.5px;font-weight:800;cursor:pointer;font-family:inherit;">
+            متابعة المعاينة كزائر
           </button>
         </div>
       </div>
@@ -228,6 +236,9 @@
     };
   }
 
+  /* ============================================================================
+     نظام السمات الثلاث (Themes) + التنسيقات الهندسية الرسمية
+     ============================================================================ */
   function injectStyles() {
     const old = document.getElementById("gdAiExcelStyles");
     if (old) old.remove();
@@ -235,12 +246,56 @@
     const style = document.createElement("style");
     style.id = "gdAiExcelStyles";
     style.textContent = `
+      /* تعريف المتغيرات للسمات الثلاث */
+      #gdAiExcelStudio[data-theme="dark_gold"] {
+        --ex-bg: linear-gradient(165deg, #141210, #1e1b18);
+        --ex-panel: #100e0c;
+        --ex-card: #211e1b;
+        --ex-border: #e09f24;
+        --ex-line: #3f3a36;
+        --ex-text: #f5f5f4;
+        --ex-muted: #a8a29e;
+        --ex-accent: #fbbf24;
+        --ex-btn-bg: #292524;
+        --ex-th-bg: #292524;
+        --ex-td-bg: #141210;
+        --ex-td-alt: #191614;
+      }
+      #gdAiExcelStudio[data-theme="light_eng"] {
+        --ex-bg: linear-gradient(165deg, #f8fafc, #f1f5f9);
+        --ex-panel: #ffffff;
+        --ex-card: #ffffff;
+        --ex-border: #0284c7;
+        --ex-line: #cbd5e1;
+        --ex-text: #0f172a;
+        --ex-muted: #475569;
+        --ex-accent: #0369a1;
+        --ex-btn-bg: #e2e8f0;
+        --ex-th-bg: #e2e8f0;
+        --ex-td-bg: #ffffff;
+        --ex-td-alt: #f8fafc;
+      }
+      #gdAiExcelStudio[data-theme="cad_blue"] {
+        --ex-bg: linear-gradient(165deg, #09111e, #0f1c33);
+        --ex-panel: #070d18;
+        --ex-card: #13223d;
+        --ex-border: #38bdf8;
+        --ex-line: #1e3a5f;
+        --ex-text: #f1f5f9;
+        --ex-muted: #94a3b8;
+        --ex-accent: #38bdf8;
+        --ex-btn-bg: #162847;
+        --ex-th-bg: #162847;
+        --ex-td-bg: #0b1424;
+        --ex-td-alt: #0f1b30;
+      }
+
       #gdGuestWelcomeBanner {
         direction: rtl;
         text-align: right;
         background: linear-gradient(135deg, #1c1917, #292524);
         border: 1.5px solid #e09f24;
-        border-radius: 16px;
+        border-radius: 14px;
         padding: 13px 16px;
         margin: 12px auto;
         max-width: 980px;
@@ -258,14 +313,15 @@
       #gdAiExcelStudio {
         direction: rtl;
         text-align: right;
-        background: linear-gradient(165deg, #141210, #1e1b18);
-        border: 2px solid #e09f24;
-        border-radius: 20px;
+        background: var(--ex-bg);
+        border: 2px solid var(--ex-border);
+        border-radius: 18px;
         padding: 16px;
         margin: 14px auto 18px;
         max-width: 980px;
-        color: #f5f5f4;
-        box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5);
+        color: var(--ex-text);
+        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+        transition: background 0.25s ease, color 0.25s ease;
       }
       .gd-ex-top-bar {
         display: flex;
@@ -274,25 +330,53 @@
         flex-wrap: wrap;
         gap: 10px;
         padding-bottom: 12px;
-        border-bottom: 1px solid #38332e;
+        border-bottom: 1px solid var(--ex-line);
         margin-bottom: 14px;
       }
-      .gd-ex-top-bar h3 { margin: 0; font-size: 18px; font-weight: 900; color: #fbbf24; }
-      .gd-ex-top-bar p { margin: 4px 0 0; font-size: 12px; color: #a8a29e; }
+      .gd-ex-top-bar h3 {
+        margin: 0;
+        font-size: 17.5px;
+        font-weight: 900;
+        color: var(--ex-accent);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .gd-ex-top-bar p { margin: 4px 0 0; font-size: 12px; color: var(--ex-muted); }
+
+      .gd-ex-header-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .gd-theme-bulb-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 12px;
+        border-radius: 999px;
+        border: 1.5px solid var(--ex-border);
+        background: var(--ex-card);
+        color: var(--ex-accent);
+        font-size: 11.5px;
+        font-weight: 900;
+        cursor: pointer;
+        font-family: inherit;
+      }
       .gd-ex-pro-pill {
         background: linear-gradient(135deg, #e09f24, #b45309);
         color: #141210;
         font-weight: 900;
         font-size: 11px;
-        padding: 5px 12px;
+        padding: 6px 12px;
         border-radius: 999px;
       }
 
       /* شريط الذكاء الاصطناعي */
       .gd-ex-ai-panel {
-        background: #100e0c;
-        border: 1.5px solid #38bdf8;
-        border-radius: 15px;
+        background: var(--ex-panel);
+        border: 1.5px solid var(--ex-border);
+        border-radius: 14px;
         padding: 13px;
         margin-bottom: 14px;
       }
@@ -302,14 +386,14 @@
         min-width: 200px;
         padding: 10px 12px;
         border-radius: 10px;
-        border: 1.5px solid #3f3a36;
-        background: #211e1b;
-        color: #ffffff;
+        border: 1.5px solid var(--ex-line);
+        background: var(--ex-card);
+        color: var(--ex-text);
         font-size: 13px;
         font-weight: 700;
         font-family: inherit;
       }
-      .gd-ex-input:focus { outline: none; border-color: #fbbf24; }
+      .gd-ex-input:focus { outline: none; border-color: var(--ex-accent); }
       .gd-ex-ai-btn {
         padding: 10px 16px;
         border-radius: 10px;
@@ -323,23 +407,23 @@
       }
       .gd-ex-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
       .gd-ex-chip {
-        background: #26221f;
-        border: 1px solid #44403c;
-        color: #e7e5e4;
-        padding: 5px 9px;
+        background: var(--ex-btn-bg);
+        border: 1px solid var(--ex-line);
+        color: var(--ex-text);
+        padding: 5px 10px;
         border-radius: 8px;
         font-size: 11px;
-        font-weight: 700;
+        font-weight: 800;
         cursor: pointer;
         font-family: inherit;
       }
-      .gd-ex-chip:hover { border-color: #fbbf24; color: #fbbf24; }
+      .gd-ex-chip:hover { border-color: var(--ex-accent); color: var(--ex-accent); }
       #gdExcelAiLog {
         margin-top: 9px;
         padding: 8px 12px;
         border-radius: 9px;
-        border: 1px solid #38bdf8;
-        background: rgba(56, 189, 248, 0.12);
+        border: 1px solid #0284c7;
+        background: rgba(2, 132, 199, 0.12);
         color: #38bdf8;
         font-size: 12px;
         font-weight: 800;
@@ -353,25 +437,25 @@
         gap: 6px;
         margin-bottom: 12px;
         padding: 9px;
-        background: #100e0c;
-        border: 1px solid #2e2a26;
+        background: var(--ex-panel);
+        border: 1px solid var(--ex-line);
         border-radius: 12px;
       }
       .gd-ex-filter-pill {
         padding: 6px 11px;
-        border-radius: 9px;
-        border: 1px solid #3f3a36;
-        background: #1c1917;
-        color: #d6d3d1;
+        border-radius: 8px;
+        border: 1px solid var(--ex-line);
+        background: var(--ex-card);
+        color: var(--ex-text);
         font-size: 11.5px;
         font-weight: 800;
         cursor: pointer;
         font-family: inherit;
       }
       .gd-ex-filter-pill.active {
-        background: rgba(224, 159, 36, 0.2);
-        border-color: #e09f24;
-        color: #fbbf24;
+        background: rgba(224, 159, 36, 0.22);
+        border-color: var(--ex-border);
+        color: var(--ex-accent);
       }
 
       .gd-ex-mode-tabs {
@@ -382,10 +466,10 @@
       }
       .gd-ex-mode-tab {
         padding: 10px 8px;
-        border-radius: 11px;
-        border: 1.5px solid #3f3a36;
-        background: #24201d;
-        color: #d6d3d1;
+        border-radius: 10px;
+        border: 1.5px solid var(--ex-line);
+        background: var(--ex-card);
+        color: var(--ex-muted);
         font-size: 12.5px;
         font-weight: 800;
         cursor: pointer;
@@ -394,8 +478,8 @@
       }
       .gd-ex-mode-tab.active {
         background: rgba(224, 159, 36, 0.18);
-        border-color: #e09f24;
-        color: #fbbf24;
+        border-color: var(--ex-border);
+        color: var(--ex-accent);
       }
 
       .gd-ex-toolbar {
@@ -407,10 +491,10 @@
       }
       .gd-ex-btn {
         padding: 8px 11px;
-        border-radius: 10px;
-        border: 1px solid #44403c;
-        background: #292524;
-        color: #f5f5f4;
+        border-radius: 9px;
+        border: 1px solid var(--ex-line);
+        background: var(--ex-btn-bg);
+        color: var(--ex-text);
         font-size: 11.5px;
         font-weight: 800;
         cursor: pointer;
@@ -419,7 +503,7 @@
         align-items: center;
         gap: 5px;
       }
-      .gd-ex-btn:hover { border-color: #e09f24; color: #fbbf24; }
+      .gd-ex-btn:hover { border-color: var(--ex-accent); color: var(--ex-accent); }
       .gd-ex-btn.gold {
         background: linear-gradient(135deg, #e09f24, #b45309);
         color: #141210;
@@ -427,33 +511,33 @@
         font-weight: 900;
       }
       .gd-ex-btn.danger {
-        background: rgba(153, 27, 27, 0.35);
+        background: rgba(185, 28, 28, 0.25);
         border-color: #ef4444;
-        color: #fca5a5;
+        color: #ef4444;
       }
 
       .gd-ex-stats {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
         gap: 7px;
         margin-bottom: 12px;
       }
       .gd-ex-stat {
-        background: #100e0c;
-        border: 1px solid #2e2a26;
+        background: var(--ex-panel);
+        border: 1px solid var(--ex-line);
         border-radius: 10px;
         padding: 8px;
         text-align: center;
       }
-      .gd-ex-stat span { display: block; font-size: 10px; color: #a8a29e; }
-      .gd-ex-stat strong { font-size: 13px; color: #fbbf24; font-weight: 900; }
+      .gd-ex-stat span { display: block; font-size: 10px; color: var(--ex-muted); }
+      .gd-ex-stat strong { font-size: 13px; color: var(--ex-accent); font-weight: 900; }
 
       .gd-ex-grid-wrap {
-        max-height: 300px;
+        max-height: 290px;
         overflow: auto;
-        border: 1.5px solid #44403c;
+        border: 1.5px solid var(--ex-line);
         border-radius: 12px;
-        background: #0e0d0b;
+        background: var(--ex-panel);
         margin-bottom: 14px;
       }
       .gd-ex-table { width: 100%; border-collapse: collapse; font-size: 12.5px; text-align: center; }
@@ -461,22 +545,22 @@
         position: sticky;
         top: 0;
         z-index: 5;
-        background: #292524;
-        color: #fbbf24;
+        background: var(--ex-th-bg);
+        color: var(--ex-accent);
         padding: 9px 6px;
-        border: 1px solid #44403c;
+        border: 1px solid var(--ex-line);
         font-weight: 900;
         white-space: nowrap;
       }
-      .gd-ex-table td { border: 1px solid #26221f; padding: 0; background: #141210; }
-      .gd-ex-table tr:nth-child(even) td { background: #191614; }
+      .gd-ex-table td { border: 1px solid var(--ex-line); padding: 0; background: var(--ex-td-bg); }
+      .gd-ex-table tr:nth-child(even) td { background: var(--ex-td-alt); }
       .gd-ex-cell {
         width: 100%;
         min-width: 76px;
         box-sizing: border-box;
         border: 0;
         background: transparent;
-        color: #f5f5f4;
+        color: var(--ex-text);
         padding: 8px 6px;
         text-align: center;
         font-size: 12.5px;
@@ -486,20 +570,20 @@
       .gd-ex-cell:focus { outline: none; background: rgba(224, 159, 36, 0.16); }
 
       .gd-ex-subpanel {
-        background: #12100e;
-        border: 1px solid #3f3a36;
+        background: var(--ex-panel);
+        border: 1px solid var(--ex-line);
         border-radius: 13px;
         padding: 13px;
         margin-bottom: 14px;
       }
       .gd-ex-textarea {
         width: 100%;
-        min-height: 115px;
+        min-height: 110px;
         box-sizing: border-box;
-        background: #1c1917;
-        border: 1.5px solid #44403c;
+        background: var(--ex-card);
+        border: 1.5px solid var(--ex-line);
         border-radius: 10px;
-        color: #f5f5f4;
+        color: var(--ex-text);
         padding: 10px;
         font-family: monospace;
         font-size: 12px;
@@ -507,12 +591,13 @@
         direction: ltr;
       }
 
+      /* شاشة المعاينة CAD */
       .gd-ex-canvas-box {
         background: #06080d;
-        border: 1.5px solid #38bdf8;
+        border: 1.5px solid var(--ex-border);
         border-radius: 14px;
         padding: 10px;
-        margin-bottom: 14px;
+        margin-bottom: 16px;
       }
       .gd-ex-canvas-head {
         display: flex;
@@ -528,7 +613,7 @@
       .gd-ex-canvas-wrapper {
         position: relative;
         width: 100%;
-        height: 320px;
+        height: 310px;
         border-radius: 10px;
         overflow: hidden;
         touch-action: none;
@@ -545,7 +630,7 @@
         z-index: 10;
       }
       .gd-cad-zbtn {
-        background: rgba(15, 23, 42, 0.88);
+        background: rgba(15, 23, 42, 0.9);
         border: 1px solid #38bdf8;
         color: #f8fafc;
         padding: 6px 10px;
@@ -555,28 +640,58 @@
         cursor: pointer;
         font-family: inherit;
       }
-      .gd-cad-zbtn:hover { background: #0284c7; }
 
-      .gd-ex-export-section-title {
-        font-size: 13px;
+      /* مركز التصدير الاحترافي بخيارين رئيسيين */
+      .gd-export-hub {
+        background: var(--ex-panel);
+        border: 1.5px solid var(--ex-border);
+        border-radius: 15px;
+        padding: 14px;
+      }
+      .gd-export-hub-title {
+        font-size: 14.5px;
         font-weight: 900;
-        color: #fbbf24;
-        margin: 12px 0 7px;
-        display: flex;
-        align-items: center;
-        gap: 6px;
+        color: var(--ex-accent);
+        margin: 0 0 10px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--ex-line);
+      }
+      .gd-export-selectors {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 10px;
+        margin-bottom: 12px;
+      }
+      .gd-export-select-box label {
+        display: block;
+        font-size: 11.5px;
+        font-weight: 900;
+        color: var(--ex-muted);
+        margin-bottom: 5px;
+      }
+      .gd-export-select-box select {
+        width: 100%;
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1.5px solid var(--ex-border);
+        background: var(--ex-card);
+        color: var(--ex-text);
+        font-size: 13px;
+        font-weight: 800;
+        font-family: inherit;
+        cursor: pointer;
       }
       .gd-ex-export-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
         gap: 8px;
       }
       .gd-ex-exp-btn {
         padding: 10px 9px;
-        border-radius: 11px;
-        border: 1.5px solid #44403c;
-        background: #211e1b;
-        color: #f5f5f4;
+        border-radius: 10px;
+        border: 1.5px solid var(--ex-line);
+        background: var(--ex-card);
+        color: var(--ex-text);
         font-size: 12px;
         font-weight: 800;
         cursor: pointer;
@@ -584,10 +699,16 @@
         text-align: center;
         transition: all 0.2s ease;
       }
-      .gd-ex-exp-btn:hover { border-color: #fbbf24; transform: translateY(-1px); }
-      .gd-ex-exp-btn small { display: block; font-size: 10px; color: #a8a29e; margin-top: 2px; }
+      .gd-ex-exp-btn:hover { border-color: var(--ex-accent); transform: translateY(-1px); }
+      .gd-ex-exp-btn small { display: block; font-size: 10px; color: var(--ex-muted); margin-top: 2px; }
     `;
     document.head.appendChild(style);
+  }
+
+  function getThemeLabel(themeKey) {
+    if (themeKey === "light_eng") return "السمة: المكتب الفاتح";
+    if (themeKey === "cad_blue") return "السمة: الكاد الأزرق";
+    return "السمة: الذهبي الداكن";
   }
 
   function renderStudioHTML() {
@@ -596,45 +717,59 @@
     return `
       <div class="gd-ex-top-bar">
         <div>
-          <h3>📊 محطة إكسيل المساحة ونظم المعلومات الجغرافية (AI Survey Excel)</h3>
-          <p>تحليل ذكي لأكواد MNH والصرف الصحي وأعمدة الإنارة والشمال والجنوب + تصدير DXF بطبقات ملونة</p>
+          <h3>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18"/>
+            </svg>
+            محطة إكسيل المساحة ونظم المعلومات الجغرافية (Survey &amp; GIS Excel)
+          </h3>
+          <p>استيراد وتصدير مباشر متوافق 100% مع Civil 3D (PENZD / PENZ) و AutoCAD و Sokkia SDR/STR و ArcGIS Pro</p>
         </div>
-        <span class="gd-ex-pro-pill">${logged ? "WORKSTATION PRO V5" : "معاينة مجانية للزوار"}</span>
+
+        <div class="gd-ex-header-actions">
+          <button type="button" id="gdCycleThemeBulbBtn" class="gd-theme-bulb-btn" title="تغيير سمة الأداة (3 سمات)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/>
+            </svg>
+            <span id="gdThemeBulbLabel">${getThemeLabel(currentTheme)}</span>
+          </button>
+          <span class="gd-ex-pro-pill">${logged ? "ENTERPRISE V6" : "وضع المعاينة"}</span>
+        </div>
       </div>
 
       <!-- شريط أوامر الذكاء الاصطناعي -->
       <div class="gd-ex-ai-panel">
         <div class="gd-ex-ai-row">
           <input type="text" id="gdExcelAiPrompt" class="gd-ex-input"
-            placeholder="اكتب أمرك: صنف الأكواد تلقائياً | افحص أخطاء الرفع | احسب المساحة | اجمع 0.50 على Z...">
-          <button type="button" id="gdExcelAiExecBtn" class="gd-ex-ai-btn">⚡ تنفيذ بالـ AI</button>
+            placeholder="أدخل أمراً هندسياً: صنف الأكواد تلقائياً | افحص أخطاء الرفع | احسب المساحة | اجمع 0.50 على Z...">
+          <button type="button" id="gdExcelAiExecBtn" class="gd-ex-ai-btn">تنفيذ الأمر</button>
         </div>
         <div class="gd-ex-chips">
-          <button type="button" class="gd-ex-chip" data-ai-cmd="صنف الأكواد المساحية تلقائياً">🏷️ تصنيف الأكواد (MNH / إنارة / شمال وجنوب)</button>
-          <button type="button" class="gd-ex-chip" data-ai-cmd="افحص أخطاء الرفع المساحي">🩺 فحص أخطاء الرفع (QA/QC)</button>
-          <button type="button" class="gd-ex-chip" data-ai-cmd="احسب المسافة والانحراف">📐 المسافة والانحراف</button>
-          <button type="button" class="gd-ex-chip" data-ai-cmd="احسب المساحة والمحيط">🗺️ المساحة بالفدان والمتر</button>
-          <button type="button" class="gd-ex-chip" data-ai-cmd="اجمع 0.50 على Z">➕ إزاحة Z (+0.50)</button>
-          <button type="button" class="gd-ex-chip" data-ai-cmd="بدل الشرق والشمال">🔄 تبديل E ⇄ N</button>
+          <button type="button" class="gd-ex-chip" data-ai-cmd="صنف الأكواد المساحية تلقائياً">◈ تصنيف الأكواد (MNH / إنارة / أشجار)</button>
+          <button type="button" class="gd-ex-chip" data-ai-cmd="افحص أخطاء الرفع المساحي">◈ فحص الجودة (QA/QC)</button>
+          <button type="button" class="gd-ex-chip" data-ai-cmd="احسب المسافة والانحراف">◈ المسافة والانحراف</button>
+          <button type="button" class="gd-ex-chip" data-ai-cmd="احسب المساحة والمحيط">◈ المساحة بالفدان والمتر</button>
+          <button type="button" class="gd-ex-chip" data-ai-cmd="اجمع 0.50 على Z">◈ إزاحة المنسوب (+0.50 Z)</button>
+          <button type="button" class="gd-ex-chip" data-ai-cmd="بدل الشرق والشمال">◈ تبديل E ⇄ N</button>
         </div>
         <div id="gdExcelAiLog">
           ${logged
-            ? "جاهز لاستيراد ملفات (XLSX, DXF, SDR, CDR, GSI, CSV) وتصنيف أكواد MNH والإنارة والشمال/الجنوب وتصديرها لطبقات AutoCAD."
-            : "وضع الزائر مفعّل: يمكنك رفع ملفات (Excel / DXF / CSV / SDR) ومعاينة الرموز الهندسية في لوحة الكاد مجاناً."}
+            ? "النظام جاهز: ارفع ملفات (Excel / DXF / SDR / STR / GSI / CSV) أو اختر الفئة وصيغة التصدير بالأسفل."
+            : "وضع المعاينة للزوار: يمكنك رفع الملفات ومعاينة النقاط على لوحة الكاد مجاناً. سجّل الدخول لتفعيل الحفظ والتصدير."}
         </div>
       </div>
 
       <!-- شريط الاستيراد والأدوات -->
       <div class="gd-ex-toolbar">
         <label class="gd-ex-btn gold" style="cursor:pointer;">
-          📂 رفع ملف (Excel / DXF / CSV / SDR / GSI)
-          <input type="file" id="gdExcelFileInput" accept=".xlsx,.xls,.csv,.txt,.dxf,.sdr,.cdr,.gsi" style="display:none;">
+          ⊞ استيراد ملف (Excel / DXF / SDR / STR / GSI / CSV)
+          <input type="file" id="gdExcelFileInput" accept=".xlsx,.xls,.csv,.txt,.dxf,.sdr,.str,.cdr,.gsi" style="display:none;">
         </label>
-        <button type="button" class="gd-ex-btn" id="gdExAutoClassifyBtn">🏷️ تصنيف الأكواد بالـ AI</button>
-        <button type="button" class="gd-ex-btn" id="gdExAddRowBtn">➕ نقطة</button>
-        <button type="button" class="gd-ex-btn" id="gdExSwapENBtn">🔄 E ⇄ N</button>
-        <button type="button" class="gd-ex-btn" id="gdExUndoBtn">↩️ تراجع</button>
-        <button type="button" class="gd-ex-btn danger" id="gdExClearBtn">🗑️ تفريغ</button>
+        <button type="button" class="gd-ex-btn" id="gdExAutoClassifyBtn">◈ تصنيف الأكواد تلقائياً</button>
+        <button type="button" class="gd-ex-btn" id="gdExAddRowBtn">+ إضافة نقطة</button>
+        <button type="button" class="gd-ex-btn" id="gdExSwapENBtn">⇄ تبديل E / N</button>
+        <button type="button" class="gd-ex-btn" id="gdExUndoBtn">↶ تراجع</button>
+        <button type="button" class="gd-ex-btn danger" id="gdExClearBtn">✕ تفريغ الجدول</button>
       </div>
 
       <!-- شريط الفلترة الذكية حسب نوع الكود -->
@@ -642,33 +777,33 @@
 
       <!-- تبويبات بيئة العمل -->
       <div class="gd-ex-mode-tabs">
-        <button type="button" class="gd-ex-mode-tab active" data-ex-subtab="grid">📋 جدول الإكسيل والبيانات</button>
-        <button type="button" class="gd-ex-mode-tab" data-ex-subtab="cad_import">📐 لصق من الأوتوكاد (LIST)</button>
-        <button type="button" class="gd-ex-mode-tab" data-ex-subtab="calc_tools">🧮 إزاحة وحفر وردم (Cut/Fill)</button>
+        <button type="button" class="gd-ex-mode-tab active" data-ex-subtab="grid">▤ جدول الإكسيل والبيانات</button>
+        <button type="button" class="gd-ex-mode-tab" data-ex-subtab="cad_import">⬡ استخراج من AutoCAD LIST</button>
+        <button type="button" class="gd-ex-mode-tab" data-ex-subtab="calc_tools">⌖ إزاحة وحفر وردم (Cut/Fill)</button>
       </div>
 
       <div id="gdExSubpanelCadImport" class="gd-ex-subpanel" style="display:none;">
-        <strong style="color:#fbbf24;font-size:13px;">استخراج الإحداثيات من الأوتوكاد عبر أمر LIST:</strong>
+        <strong style="color:var(--ex-accent);font-size:13px;">استخراج الإحداثيات من الأوتوكاد عبر أمر LIST:</strong>
         <textarea id="gdAcadListPasteArea" class="gd-ex-textarea" placeholder="at point  X= 312450.120  Y= 3110210.450  Z= 24.510"></textarea>
         <button type="button" class="gd-ex-btn gold" id="gdParseAcadListBtn" style="width:100%;justify-content:center;">
-          ⚡ استخراج الإحداثيات ومعاينتها في لوحة الكاد
+          استخراج الإحداثيات وإضافتها للجدول ولوحة الرسم
         </button>
       </div>
 
       <div id="gdExSubpanelCalcTools" class="gd-ex-subpanel" style="display:none;">
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">
-          <div style="background:#1c1917;padding:10px;border-radius:10px;border:1px solid #38332e;">
-            <strong style="color:#38bdf8;font-size:12.5px;">1. إزاحة الإحداثيات (Coordinate Shift)</strong>
+          <div style="background:var(--ex-card);padding:10px;border-radius:10px;border:1px solid var(--ex-line);">
+            <strong style="color:var(--ex-accent);font-size:12.5px;">1. إزاحة الإحداثيات (Coordinate Shift)</strong>
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin:8px 0;">
               <input type="number" step="any" id="gdShiftE" class="gd-ex-input" style="min-width:0;text-align:center;" placeholder="ΔE (0)">
               <input type="number" step="any" id="gdShiftN" class="gd-ex-input" style="min-width:0;text-align:center;" placeholder="ΔN (0)">
               <input type="number" step="any" id="gdShiftZ" class="gd-ex-input" style="min-width:0;text-align:center;" placeholder="ΔZ (0)">
             </div>
-            <button type="button" class="gd-ex-btn" id="gdApplyShiftBtn" style="width:100%;justify-content:center;">تطبيق الإزاحة على النقاط</button>
+            <button type="button" class="gd-ex-btn" id="gdApplyShiftBtn" style="width:100%;justify-content:center;">تطبيق الإزاحة</button>
           </div>
 
-          <div style="background:#1c1917;padding:10px;border-radius:10px;border:1px solid #38332e;">
-            <strong style="color:#4ade80;font-size:12.5px;">2. حساب الحفر والردم (Cut &amp; Fill)</strong>
+          <div style="background:var(--ex-card);padding:10px;border-radius:10px;border:1px solid var(--ex-line);">
+            <strong style="color:#16a34a;font-size:12.5px;">2. حساب الحفر والردم (Cut &amp; Fill)</strong>
             <div style="margin:8px 0;">
               <input type="number" step="any" id="gdDesignLevelInput" class="gd-ex-input" style="width:100%;text-align:center;" placeholder="منسوب التصميم (مثال: 24.50)">
             </div>
@@ -688,11 +823,11 @@
       <!-- شاشة المعاينة الهندسية التفاعلية -->
       <div class="gd-ex-canvas-box">
         <div class="gd-ex-canvas-head">
-          <span>🖥️ معاينة CAD بالرموز الهندسية (🟠 مطابق MNH • 🟡 إنارة • 🔺 روبير • 🔵 شمال / 🔴 جنوب)</span>
+          <span>معاينة CAD بالرموز الهندسية (صرف MNH • إنارة LP • أشجار TREE • روبير BM)</span>
           <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
-            <input type="text" id="gdExSearchInput" class="gd-ex-input" style="max-width:110px;padding:4px 8px;font-size:11px;" placeholder="🔍 بحث...">
-            <button type="button" class="gd-ex-btn" style="padding:4px 8px;font-size:11px;" id="gdToggleLabelsBtn">🏷️ النصوص</button>
-            <button type="button" class="gd-ex-btn" style="padding:4px 8px;font-size:11px;" id="gdCycleConnectBtn">📏 توصيل: حسب الكود</button>
+            <input type="text" id="gdExSearchInput" class="gd-ex-input" style="max-width:110px;padding:4px 8px;font-size:11px;" placeholder="بحث...">
+            <button type="button" class="gd-ex-btn" style="padding:4px 8px;font-size:11px;" id="gdToggleLabelsBtn">النصوص</button>
+            <button type="button" class="gd-ex-btn" style="padding:4px 8px;font-size:11px;" id="gdCycleConnectBtn">التوصيل: حسب الكود</button>
             <select id="gdCrsSelect" class="gd-ex-btn" style="padding:4px 8px;font-size:11px;">
               <option value="UTM36N" selected>UTM Zone 36N</option>
               <option value="UTM35N">UTM Zone 35N</option>
@@ -703,74 +838,103 @@
         <div class="gd-ex-canvas-wrapper" id="gdCadCanvasWrapper">
           <canvas id="gdExcelCadCanvas"></canvas>
           <div class="gd-cad-zoom-controls">
-            <button type="button" class="gd-cad-zbtn" id="gdCadZoomInBtn">➕ تقريب</button>
-            <button type="button" class="gd-cad-zbtn" id="gdCadZoomOutBtn">➖ تبعيد</button>
-            <button type="button" class="gd-cad-zbtn" id="gdCadZoomResetBtn">🎯 توسيط الكل</button>
+            <button type="button" class="gd-cad-zbtn" id="gdCadZoomInBtn">+ تقريب</button>
+            <button type="button" class="gd-cad-zbtn" id="gdCadZoomOutBtn">- تبعيد</button>
+            <button type="button" class="gd-cad-zbtn" id="gdCadZoomResetBtn">توسيط الكل</button>
           </div>
         </div>
       </div>
 
-      <!-- قسم تصدير Excel نظيف بدون عناوين -->
-      <div class="gd-ex-export-section-title">📗 حفظ وتصدير ملفات Excel نظيفة (تبدأ من النقطة رقم 1 مباشرة):</div>
-      <div class="gd-ex-export-grid">
-        <button type="button" class="gd-ex-exp-btn" data-export-fmt="xlsx_penzd" style="border-color:#22c55e;">
-          📗 Excel نظيف (P, E, N, Z, Code)
-          <small>${logged ? "جاهز للتحميل المباشر" : "🔒 يتطلب تسجيل الدخول"}</small>
-        </button>
-        <button type="button" class="gd-ex-exp-btn" data-export-fmt="xlsx_pnz" style="border-color:#10b981;">
-          📗 Excel نظيف (P, N, Z)
-          <small>${logged ? "جاهز للتحميل المباشر" : "🔒 يتطلب تسجيل الدخول"}</small>
-        </button>
-        <button type="button" class="gd-ex-exp-btn" data-export-fmt="xlsx_pnez" style="border-color:#14b8a6;">
-          📗 Excel نظيف (P, N, E, Z)
-          <small>${logged ? "جاهز للتحميل المباشر" : "🔒 يتطلب تسجيل الدخول"}</small>
-        </button>
-      </div>
+      <!-- مركز التصدير الاحترافي بخيارين رئيسيين -->
+      <div class="gd-export-hub">
+        <div class="gd-export-hub-title">▣ مركز التصدير والحفظ الاحترافي (Civil 3D / AutoCAD / Total Station / GIS)</div>
 
-      <!-- قسم التصدير لبرامج CAD & Surfer -->
-      <div class="gd-ex-export-section-title">📐 تصدير ذكي لبرامج الأوتوكاد والسيرفر (طبقات ورموز تلقائية):</div>
-      <div class="gd-ex-export-grid">
-        <button type="button" class="gd-ex-exp-btn" data-export-fmt="dxf" style="border-color:#ef4444;">
-          📕 لوحة AutoCAD (.dxf) بطبقات ذكية
-          <small>${logged ? "يفصل MNH والإنارة والشمال/الجنوب في طبقات" : "🔒 يتطلب تسجيل الدخول"}</small>
-        </button>
-        <button type="button" class="gd-ex-exp-btn" data-export-fmt="csv" style="border-color:#38bdf8;">
-          📘 Civil 3D (.csv)
-          <small>${logged ? "صيغة PENZD جاهزة" : "🔒 يتطلب تسجيل الدخول"}</small>
-        </button>
-        <button type="button" class="gd-ex-exp-btn" data-export-fmt="surfer" style="border-color:#f59e0b;">
-          🏔️ برنامج Surfer (.dat)
-          <small>${logged ? "XYZ جاهز للكنتور" : "🔒 يتطلب تسجيل الدخول"}</small>
-        </button>
-        <button type="button" class="gd-ex-exp-btn" data-export-fmt="lsp" style="border-color:#a855f7;">
-          ⚡ AutoCAD LISP (.lsp)
-          <small>${logged ? "أمر GD_PLOT_PTS" : "🔒 يتطلب تسجيل الدخول"}</small>
-        </button>
-      </div>
+        <div class="gd-export-selectors">
+          <div class="gd-export-select-box">
+            <label>1. اختيار صيغة وترتيب الأعمدة (Point Format):</label>
+            <select id="gdExportColOrderSelect">
+              <option value="PENZD" selected>PENZD — (نقطة، شرق E، شمال N، منسوب Z، وصف D)</option>
+              <option value="PENZ">PENZ — (نقطة، شرق E، شمال N، منسوب Z)</option>
+              <option value="PNEZD">PNEZD — (نقطة، شمال N، شرق E، منسوب Z، وصف D)</option>
+              <option value="PEN">PEN — (نقطة، شرق E، شمال N فقط)</option>
+              <option value="PNE">PNE — (نقطة، شمال N، شرق E فقط)</option>
+            </select>
+          </div>
 
-      <!-- قسم التصدير لبرامج GIS وأجهزة التوتال ستيشن -->
-      <div class="gd-ex-export-section-title">🌍 تصدير مباشر لـ ArcGIS Pro و QGIS وأجهزة التوتال ستيشن:</div>
-      <div class="gd-ex-export-grid">
-        <button type="button" class="gd-ex-exp-btn" data-export-fmt="geojson" style="border-color:#10b981;">
-          🗺️ ArcGIS Pro / QGIS (.geojson)
-          <small>${logged ? "طبقة جغرافية بالتصنيف الهندسي" : "🔒 يتطلب تسجيل الدخول"}</small>
-        </button>
-        <button type="button" class="gd-ex-exp-btn" data-export-fmt="wkt" style="border-color:#06b6d4;">
-          📊 ArcGIS Pro WKT (.csv)
-          <small>${logged ? "حقل POINT Z جاهز" : "🔒 يتطلب تسجيل الدخول"}</small>
-        </button>
-        <button type="button" class="gd-ex-exp-btn" data-export-fmt="kml" style="border-color:#f97316;">
-          🛰️ Google Earth (.kml)
-          <small>${logged ? "عرض على القمر الصناعي" : "🔒 يتطلب تسجيل الدخول"}</small>
-        </button>
-        <button type="button" class="gd-ex-exp-btn" data-export-fmt="sdr" style="border-color:#eab308;">
-          📡 Sokkia SDR / CDR (.sdr)
-          <small>${logged ? "للتوتال ستيشن (التوقيع)" : "🔒 يتطلب تسجيل الدخول"}</small>
-        </button>
-        <button type="button" class="gd-ex-exp-btn" data-export-fmt="gsi" style="border-color:#84cc16;">
-          📡 Leica GSI (.gsi)
-          <small>${logged ? "ملف جهاز لايكا جاهز" : "🔒 يتطلب تسجيل الدخول"}</small>
-        </button>
+          <div class="gd-export-select-box">
+            <label>2. اختيار النقاط المراد تصديرها (Data Scope):</label>
+            <select id="gdExportTargetScopeSelect">
+              <option value="ALL" selected>تصدير كافة النقاط في الجدول (All Points)</option>
+              <option value="FILTERED">تصدير النقاط المفلترة الظاهرة حالياً فقط</option>
+              <option value="LIGHT">تصدير نقاط أعمدة الإنارة فقط (LP / Light Poles)</option>
+              <option value="SEWER">تصدير نقاط الصرف الصحي والمطابق فقط (MNH / SAN)</option>
+              <option value="TREES">تصدير نقاط الأشجار واللاندسكيب فقط (TREE / PALM)</option>
+              <option value="NGL_ROAD">تصدير نقاط الأرض الطبيعية والطرق فقط (EG / RD)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="gd-ex-export-grid">
+          <button type="button" class="gd-ex-exp-btn" data-export-fmt="civil3d_csv" style="border-color:#0284c7;">
+            Civil 3D (.csv)
+            <small>${logged ? "بدون BOM — يفتح بالـ Point Style فوراً" : "يتطلب تسجيل الدخول"}</small>
+          </button>
+
+          <button type="button" class="gd-ex-exp-btn" data-export-fmt="plain_txt" style="border-color:#38bdf8;">
+            ملف نصي قياسي (.txt)
+            <small>${logged ? "صيغة نصية نظيفة للأجهزة والبرامج" : "يتطلب تسجيل الدخول"}</small>
+          </button>
+
+          <button type="button" class="gd-ex-exp-btn" data-export-fmt="xlsx_clean" style="border-color:#22c55e;">
+            ملف Excel نظيف (.xlsx)
+            <small>${logged ? "يبدأ من أول نقطة مباشرة بلا عناوين" : "يتطلب تسجيل الدخول"}</small>
+          </button>
+
+          <button type="button" class="gd-ex-exp-btn" data-export-fmt="dxf" style="border-color:#ef4444;">
+            لوحة AutoCAD (.dxf)
+            <small>${logged ? "طبقات ورموز هندسية جاهزة" : "يتطلب تسجيل الدخول"}</small>
+          </button>
+
+          <button type="button" class="gd-ex-exp-btn" data-export-fmt="dwg_bundle" style="border-color:#f97316;">
+            حزمة AutoCAD DWG (.scr + .dxf)
+            <small>${logged ? "رسم وحفظ تلقائي بصيغة DWG" : "يتطلب تسجيل الدخول"}</small>
+          </button>
+
+          <button type="button" class="gd-ex-exp-btn" data-export-fmt="str" style="border-color:#eab308;">
+            توتال ستيشن Sokkia (.str)
+            <small>${logged ? "ملف STR جاهز للرفع على الجهاز" : "يتطلب تسجيل الدخول"}</small>
+          </button>
+
+          <button type="button" class="gd-ex-exp-btn" data-export-fmt="sdr" style="border-color:#ca8a04;">
+            توتال ستيشن Sokkia (.sdr)
+            <small>${logged ? "صيغة SDR33 للتوقيع المساحي" : "يتطلب تسجيل الدخول"}</small>
+          </button>
+
+          <button type="button" class="gd-ex-exp-btn" data-export-fmt="gsi" style="border-color:#84cc16;">
+            توتال ستيشن Leica (.gsi)
+            <small>${logged ? "ملف لايكا جاهز" : "يتطلب تسجيل الدخول"}</small>
+          </button>
+
+          <button type="button" class="gd-ex-exp-btn" data-export-fmt="surfer" style="border-color:#f59e0b;">
+            برنامج Surfer (.dat)
+            <small>${logged ? "XYZ للكنتور وحساب الكميات" : "يتطلب تسجيل الدخول"}</small>
+          </button>
+
+          <button type="button" class="gd-ex-exp-btn" data-export-fmt="geojson" style="border-color:#10b981;">
+            ArcGIS Pro / QGIS (.geojson)
+            <small>${logged ? "طبقة GIS ثلاثية الأبعاد" : "يتطلب تسجيل الدخول"}</small>
+          </button>
+
+          <button type="button" class="gd-ex-exp-btn" data-export-fmt="wkt" style="border-color:#06b6d4;">
+            ArcGIS Pro WKT (.csv)
+            <small>${logged ? "حقل POINT Z جاهز" : "يتطلب تسجيل الدخول"}</small>
+          </button>
+
+          <button type="button" class="gd-ex-exp-btn" data-export-fmt="kml" style="border-color:#a855f7;">
+            Google Earth (.kml)
+            <small>${logged ? "عرض النقاط على القمر الصناعي" : "يتطلب تسجيل الدخول"}</small>
+          </button>
+        </div>
       </div>
     `;
   }
@@ -786,13 +950,14 @@
 
   function computeSurveyStats() {
     const { eKey, nKey, zKey } = getCoordKeys();
-    let sewerCount = 0, lightCount = 0, dirCount = 0, nglCount = 0, roadCount = 0;
+    let sewerCount = 0, lightCount = 0, treeCount = 0, dirCount = 0, nglCount = 0, roadCount = 0;
 
     const validPts = [];
     rows.forEach(r => {
       const cls = getRowClassification(r);
       if (cls.group === "SEWER") sewerCount++;
       else if (cls.group === "LIGHT") lightCount++;
+      else if (cls.group === "TREES") treeCount++;
       else if (cls.group === "DIR") dirCount++;
       else if (cls.group === "NGL") nglCount++;
       else if (cls.group === "ROAD") roadCount++;
@@ -804,7 +969,7 @@
     });
 
     if (!validPts.length) {
-      return { count: rows.length, minZ: "-", maxZ: "-", perimeter: 0, areaM2: 0, sewerCount, lightCount, dirCount, nglCount, roadCount };
+      return { count: rows.length, minZ: "-", maxZ: "-", perimeter: 0, areaM2: 0, sewerCount, lightCount, treeCount, dirCount, nglCount, roadCount };
     }
 
     const zVals = validPts.map(p => p.z).filter(v => !isNaN(v));
@@ -831,6 +996,7 @@
       areaM2: Math.abs(area2) / 2,
       sewerCount,
       lightCount,
+      treeCount,
       dirCount,
       nglCount,
       roadCount
@@ -881,7 +1047,7 @@
   }
 
   /* ============================================================================
-     استيراد الملفات
+     استيراد الملفات (Excel, DXF, SDR, STR, CDR, GSI, CSV, TXT)
      ============================================================================ */
   function parseDxfContent(dxfText) {
     const lines = dxfText.split(/\r?\n/).map(l => l.trim());
@@ -985,7 +1151,7 @@
             resetCadView();
             renderExcelTable();
             showExcelLog(
-              `📗 تم رفع ${rows.length} نقطة وتصنيفها تلقائياً: (${st.sewerCount} مطبق/صرف MNH | ${st.lightCount} عمود إنارة | ${st.nglCount} أرض طبيعية | ${st.dirCount} شمال/جنوب).`,
+              `تم استيراد ${rows.length} نقطة وتصنيفها تلقائياً: (${st.sewerCount} صرف MNH | ${st.lightCount} إنارة | ${st.treeCount} أشجار | ${st.nglCount} أرض طبيعية).`,
               "success"
             );
           } catch (err) {
@@ -1008,14 +1174,14 @@
         rows = pts;
         resetCadView();
         renderExcelTable();
-        showExcelLog(`📐 تم رفع ${rows.length} نقطة من لوحة AutoCAD DXF (${file.name})!`, "success");
+        showExcelLog(`تم استيراد ${rows.length} نقطة من لوحة AutoCAD DXF (${file.name}).`, "success");
         return;
       }
 
       const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
       if (!lines.length) return;
 
-      if (ext === "sdr" || ext === "cdr") {
+      if (ext === "sdr" || ext === "str" || ext === "cdr") {
         const parsed = [];
         lines.forEach(line => {
           if (line.startsWith("08KI") || line.startsWith("08TP")) {
@@ -1034,7 +1200,7 @@
           rows = parsed;
           resetCadView();
           renderExcelTable();
-          showExcelLog(`📡 تم رفع ${rows.length} نقطة من ملف التوتال ستيشن (${file.name})!`, "success");
+          showExcelLog(`تم استيراد ${rows.length} نقطة من ملف التوتال ستيشن (${file.name}).`, "success");
           return;
         }
       }
@@ -1061,7 +1227,7 @@
           rows = parsed;
           resetCadView();
           renderExcelTable();
-          showExcelLog(`📡 تم رفع ${rows.length} نقطة من ملف Leica GSI!`, "success");
+          showExcelLog(`تم استيراد ${rows.length} نقطة من ملف Leica GSI.`, "success");
           return;
         }
       }
@@ -1083,14 +1249,54 @@
       });
       resetCadView();
       renderExcelTable();
-      showExcelLog(`✅ تم رفع ${rows.length} نقطة من ${file.name} وعرضها!`, "success");
+      showExcelLog(`تم استيراد ${rows.length} نقطة من ${file.name}.`, "success");
     };
     reader.readAsText(file);
   }
 
   /* ============================================================================
-     التصدير الذكي (بما في ذلك DXF مقسم لطبقات ملونة حسب كود MNH والإنارة والشمال/الجنوب)
+     تجهيز النقاط للتصدير حسب الاختيارين: (صيغة الأعمدة + فئة النقاط)
      ============================================================================ */
+  function getRowsForExportScope() {
+    const scope = document.getElementById("gdExportTargetScopeSelect")?.value || exportTargetScope;
+    if (scope === "FILTERED") {
+      return getFilteredRowsWithIndex().map(item => item.r);
+    }
+    if (scope === "ALL") return rows;
+
+    return rows.filter(r => {
+      const cls = getRowClassification(r);
+      if (scope === "LIGHT") return cls.group === "LIGHT";
+      if (scope === "SEWER") return cls.group === "SEWER";
+      if (scope === "TREES") return cls.group === "TREES";
+      if (scope === "NGL_ROAD") return cls.group === "NGL" || cls.group === "ROAD";
+      return true;
+    });
+  }
+
+  function formatPointTuple(rowObj, idx, orderMode) {
+    const { pKey, eKey, nKey, zKey, cKey } = getCoordKeys();
+    // تنظيف رقم النقطة والوصف من أي رموز قد تربك Civil 3D
+    const rawP = rowObj[pKey] !== undefined && String(rowObj[pKey]).trim() !== "" ? String(rowObj[pKey]).trim() : String(idx + 1);
+    const p = rawP.replace(/[^\w\-.]/g, "") || String(idx + 1);
+    const eNum = parseFloat(rowObj[eKey]);
+    const nNum = parseFloat(rowObj[nKey]);
+    const zNum = parseFloat(rowObj[zKey]);
+    if (isNaN(eNum) || isNaN(nNum)) return null;
+
+    const e = eNum.toFixed(4);
+    const n = nNum.toFixed(4);
+    const z = (isNaN(zNum) ? 0 : zNum).toFixed(4);
+    const rawD = rowObj[cKey] !== undefined ? String(rowObj[cKey]).trim() : "PT";
+    const d = rawD.replace(/[,;"'\r\n]+/g, " ").trim() || "PT";
+
+    if (orderMode === "PENZ") return [p, e, n, z];
+    if (orderMode === "PNEZD") return [p, n, e, z, d];
+    if (orderMode === "PEN") return [p, e, n];
+    if (orderMode === "PNE") return [p, n, e];
+    return [p, e, n, z, d]; // PENZD الافتراضي المعتمد في Civil 3D
+  }
+
   function downloadBlob(content, filename, mime) {
     const blob = new Blob([content], { type: mime });
     const url = URL.createObjectURL(blob);
@@ -1103,121 +1309,209 @@
     setTimeout(() => URL.revokeObjectURL(url), 1500);
   }
 
-  function exportCleanHeaderlessExcel(mode) {
-    if (!rows.length) return showExcelLog("الجدول فارغ، أضف نقاطاً أولاً.", "error");
+  function buildDxfString(targetRows) {
     const { pKey, eKey, nKey, zKey, cKey } = getCoordKeys();
+    const dxf = ["0", "SECTION", "2", "ENTITIES"];
+    const groupedPolylines = {};
 
-    ensureSheetJS(() => {
-      const aoaData = [];
-      rows.forEach((r, idx) => {
-        const pVal = r[pKey] !== undefined && r[pKey] !== "" ? r[pKey] : String(idx + 1);
-        const eVal = parseFloat(r[eKey]);
-        const nVal = parseFloat(r[nKey]);
-        const zVal = parseFloat(r[zKey]);
-        const cVal = r[cKey] !== undefined ? String(r[cKey]) : "";
+    targetRows.forEach((r, idx) => {
+      const e = parseFloat(r[eKey]);
+      const n = parseFloat(r[nKey]);
+      const z = parseFloat(r[zKey]) || 0;
+      const p = String(r[pKey] || idx + 1);
+      const c = String(r[cKey] || "");
+      if (isNaN(e) || isNaN(n)) return;
 
-        if (isNaN(eVal) || isNaN(nVal)) return;
+      const cls = getRowClassification(r);
+      if (!groupedPolylines[cls.layer]) groupedPolylines[cls.layer] = [];
+      groupedPolylines[cls.layer].push({ e, n, z, color: cls.dxfColor });
 
-        if (mode === "xlsx_pnz") {
-          aoaData.push([pVal, nVal, isNaN(zVal) ? 0 : zVal]);
-        } else if (mode === "xlsx_pnez") {
-          aoaData.push([pVal, nVal, eVal, isNaN(zVal) ? 0 : zVal]);
-        } else {
-          aoaData.push([pVal, eVal, nVal, isNaN(zVal) ? 0 : zVal, cVal]);
-        }
-      });
+      dxf.push("0", "POINT", "8", cls.layer, "62", String(cls.dxfColor), "10", e.toFixed(4), "20", n.toFixed(4), "30", z.toFixed(4));
 
-      const ws = window.XLSX.utils.aoa_to_sheet(aoaData);
-      const wb = window.XLSX.utils.book_new();
-      window.XLSX.utils.book_append_sheet(wb, ws, "Points");
-      const label = mode === "xlsx_pnz" ? "PNZ" : mode === "xlsx_pnez" ? "PNEZ" : "PENZD";
-      window.XLSX.writeFile(wb, `GeoDev_${label}_Clean_${Date.now()}.xlsx`);
-      showExcelLog(`📗 تم تصدير ملف Excel نظيف (${label}) يبدأ من النقطة 1 مباشرة!`, "success");
+      if (cls.symbol === "MANHOLE") {
+        dxf.push("0", "CIRCLE", "8", cls.layer, "62", "30", "10", e.toFixed(4), "20", n.toFixed(4), "30", z.toFixed(4), "40", "0.60");
+      } else if (cls.symbol === "LIGHT") {
+        dxf.push("0", "CIRCLE", "8", cls.layer, "62", "2", "10", e.toFixed(4), "20", n.toFixed(4), "30", z.toFixed(4), "40", "0.40");
+      } else if (cls.symbol === "TREE") {
+        dxf.push("0", "CIRCLE", "8", cls.layer, "62", "3", "10", e.toFixed(4), "20", n.toFixed(4), "30", z.toFixed(4), "40", "0.75");
+      }
+
+      dxf.push("0", "TEXT", "8", `${cls.layer}_ID`, "62", String(cls.dxfColor), "10", (e + 0.45).toFixed(4), "20", (n + 0.35).toFixed(4), "30", z.toFixed(4), "40", "0.50", "1", `${p} ${c}`.trim());
+      dxf.push("0", "TEXT", "8", `${cls.layer}_ELEV`, "62", "7", "10", (e + 0.45).toFixed(4), "20", (n - 0.35).toFixed(4), "30", z.toFixed(4), "40", "0.42", "1", z.toFixed(3));
     });
+
+    Object.entries(groupedPolylines).forEach(([layerName, pts]) => {
+      if (pts.length >= 2 && layerName !== "GD_LIGHT_POLES" && layerName !== "GD_TREES" && layerName !== "GD_BENCHMARKS") {
+        dxf.push("0", "POLYLINE", "8", `${layerName}_LINE`, "62", String(pts[0].color), "66", "1", "70", "8");
+        pts.forEach(pt => {
+          dxf.push("0", "VERTEX", "8", `${layerName}_LINE`, "10", pt.e.toFixed(4), "20", pt.n.toFixed(4), "30", pt.z.toFixed(4));
+        });
+        dxf.push("0", "SEQEND");
+      }
+    });
+
+    dxf.push("0", "ENDSEC", "0", "EOF");
+    return dxf.join("\r\n") + "\r\n";
   }
 
   function exportData(format) {
     if (!checkAuthState()) {
-      openAuthRequiredModal("حفظ وتصدير الملفات بصيغ Excel و AutoCAD و GIS");
+      openAuthRequiredModal("حفظ وتصدير الملفات بصيغ Civil 3D و AutoCAD و Excel");
       return;
     }
 
-    if (!rows.length) return showExcelLog("الجدول فارغ، أضف نقاطاً أولاً.", "error");
+    const orderMode = document.getElementById("gdExportColOrderSelect")?.value || exportColOrder;
+    const scopeMode = document.getElementById("gdExportTargetScopeSelect")?.value || exportTargetScope;
+    const targetRows = getRowsForExportScope();
+
+    if (!targetRows.length) {
+      showExcelLog("لا توجد نقاط مطابقة للفئة المختارة للتصدير.", "warn");
+      return;
+    }
+
     const { pKey, eKey, nKey, zKey, cKey } = getCoordKeys();
 
-    if (format === "xlsx_penzd" || format === "xlsx_pnz" || format === "xlsx_pnez") {
-      exportCleanHeaderlessExcel(format);
+    // 1. تصدير Civil 3D CSV نظيف 100% بدون BOM (يحل خطأ Point Style والاستيراد في Civil 3D)
+    if (format === "civil3d_csv") {
+      const lines = [];
+      targetRows.forEach((r, idx) => {
+        const tuple = formatPointTuple(r, idx, orderMode);
+        if (tuple) lines.push(tuple.join(","));
+      });
+      // بدون \uFEFF نهائياً حتى يقرأه Civil 3D فوراً بدون أي أخطاء
+      downloadBlob(lines.join("\r\n") + "\r\n", `GeoDev_Civil3D_${orderMode}_${scopeMode}_${Date.now()}.csv`, "text/csv;charset=ascii;");
+      showExcelLog(`تم تصدير ${lines.length} نقطة بصيغة Civil 3D (${orderMode}) بدون BOM — جاهزة للاستيراد بالـ Point Style مباشرة.`, "success");
       return;
     }
 
-    // تصدير DXF ذكي مقسم إلى طبقات ملونة ورموز للمطابق وأعمدة الإنارة
-    if (format === "dxf") {
-      const dxf = ["0", "SECTION", "2", "ENTITIES"];
-      const groupedPolylines = {};
+    // 2. تصدير ملف نصي قياسي (.txt)
+    if (format === "plain_txt") {
+      const lines = [];
+      targetRows.forEach((r, idx) => {
+        const tuple = formatPointTuple(r, idx, orderMode);
+        if (tuple) lines.push(tuple.join(","));
+      });
+      downloadBlob(lines.join("\r\n") + "\r\n", `GeoDev_${orderMode}_${scopeMode}_${Date.now()}.txt`, "text/plain;charset=ascii;");
+      showExcelLog(`تم تصدير ${lines.length} نقطة إلى ملف نصي (${orderMode} .txt) بنجاح.`, "success");
+      return;
+    }
 
-      rows.forEach(r => {
+    // 3. تصدير ملف Excel نظيف (.xlsx) يبدأ من النقطة 1 مباشرة حسب الترتيب المختار
+    if (format === "xlsx_clean") {
+      ensureSheetJS(() => {
+        const aoaData = [];
+        targetRows.forEach((r, idx) => {
+          const tuple = formatPointTuple(r, idx, orderMode);
+          if (!tuple) return;
+          // تحويل الإحداثيات لأرقام حقيقية داخل الإكسيل
+          const numericRow = tuple.map((val, colIdx) => {
+            if (colIdx === 0) return val;
+            if (orderMode.endsWith("D") && colIdx === tuple.length - 1) return val;
+            const n = parseFloat(val);
+            return isNaN(n) ? val : n;
+          });
+          aoaData.push(numericRow);
+        });
+        const ws = window.XLSX.utils.aoa_to_sheet(aoaData);
+        const wb = window.XLSX.utils.book_new();
+        window.XLSX.utils.book_append_sheet(wb, ws, "Points");
+        window.XLSX.writeFile(wb, `GeoDev_Excel_${orderMode}_${scopeMode}_${Date.now()}.xlsx`);
+        showExcelLog(`تم تصدير ${aoaData.length} نقطة إلى Excel نظيف بصيغة (${orderMode}) يبدأ من النقطة 1 مباشرة.`, "success");
+      });
+      return;
+    }
+
+    // 4. تصدير لوحة AutoCAD DXF (.dxf)
+    if (format === "dxf") {
+      const dxfStr = buildDxfString(targetRows);
+      downloadBlob(dxfStr, `GeoDev_AutoCAD_${scopeMode}_${Date.now()}.dxf`, "application/dxf");
+      showExcelLog(`تم تصدير لوحة AutoCAD DXF (${targetRows.length} نقطة) بطبقات ورموز هندسية جاهزة.`, "success");
+      return;
+    }
+
+    // 5. تصدير حزمة AutoCAD DWG (ملف DXF + سكريبت حفظ تلقائي DWG)
+    if (format === "dwg_bundle") {
+      const dxfStr = buildDxfString(targetRows);
+      const stamp = Date.now();
+      downloadBlob(dxfStr, `GeoDev_DWG_Source_${stamp}.dxf`, "application/dxf");
+
+      const scrLines = [
+        "_OSMODE 0",
+        "_PDMODE 34",
+        "_PDSIZE 0.5"
+      ];
+      targetRows.forEach((r, idx) => {
         const e = parseFloat(r[eKey]);
         const n = parseFloat(r[nKey]);
         const z = parseFloat(r[zKey]) || 0;
-        const p = String(r[pKey] || "");
+        const p = String(r[pKey] || idx + 1);
         const c = String(r[cKey] || "");
-        if (isNaN(e) || isNaN(n)) return;
-
-        const cls = getRowClassification(r);
-        if (!groupedPolylines[cls.layer]) groupedPolylines[cls.layer] = [];
-        groupedPolylines[cls.layer].push({ e, n, z, color: cls.dxfColor });
-
-        // النقطة في طبقة الكود الخاصة بها وباللون الهندسي المميز
-        dxf.push("0", "POINT", "8", cls.layer, "62", String(cls.dxfColor), "10", e.toFixed(4), "20", n.toFixed(4), "30", z.toFixed(4));
-
-        // رسم دائرة حول المطابق (MNH / الصرف) أو أعمدة الإنارة داخل الأوتوكاد تلقائياً
-        if (cls.symbol === "MANHOLE") {
-          dxf.push("0", "CIRCLE", "8", cls.layer, "62", "30", "10", e.toFixed(4), "20", n.toFixed(4), "30", z.toFixed(4), "40", "0.60");
-        } else if (cls.symbol === "LIGHT") {
-          dxf.push("0", "CIRCLE", "8", cls.layer, "62", "2", "10", e.toFixed(4), "20", n.toFixed(4), "30", z.toFixed(4), "40", "0.40");
-        }
-
-        // كتابة رقم النقطة والكود
-        dxf.push("0", "TEXT", "8", `${cls.layer}_ID`, "62", String(cls.dxfColor), "10", (e + 0.45).toFixed(4), "20", (n + 0.35).toFixed(4), "30", z.toFixed(4), "40", "0.50", "1", `${p} (${c})`.trim());
-        // كتابة المنسوب Z
-        dxf.push("0", "TEXT", "8", `${cls.layer}_ELEV`, "62", "7", "10", (e + 0.45).toFixed(4), "20", (n - 0.35).toFixed(4), "30", z.toFixed(4), "40", "0.42", "1", z.toFixed(3));
-      });
-
-      // رسم خطوط Polyline منفصلة لكل طبقة (خط للصرف، خط للطريق، إلخ)
-      Object.entries(groupedPolylines).forEach(([layerName, pts]) => {
-        if (pts.length >= 2 && layerName !== "GD_LIGHT_POLES" && layerName !== "GD_BENCHMARKS") {
-          dxf.push("0", "POLYLINE", "8", `${layerName}_LINE`, "62", String(pts[0].color), "66", "1", "70", "8");
-          pts.forEach(pt => {
-            dxf.push("0", "VERTEX", "8", `${layerName}_LINE`, "10", pt.e.toFixed(4), "20", pt.n.toFixed(4), "30", pt.z.toFixed(4));
-          });
-          dxf.push("0", "SEQEND");
+        if (!isNaN(e) && !isNaN(n)) {
+          scrLines.push(`_POINT ${e.toFixed(4)},${n.toFixed(4)},${z.toFixed(4)}`);
+          scrLines.push(`_TEXT ${(e + 0.4).toFixed(4)},${(n + 0.35).toFixed(4)} 0.5 0 ${p} ${c}`.trim());
         }
       });
-
-      dxf.push("0", "ENDSEC", "0", "EOF");
-      downloadBlob(dxf.join("\r\n") + "\r\n", `GeoDev_SmartLayers_AutoCAD_${Date.now()}.dxf`, "application/dxf");
-      showExcelLog("📕 تم تصدير لوحة AutoCAD DXF بطبقات ملونة منفصلة للمطابق MNH وأعمدة الإنارة والشمال والجنوب!", "success");
+      scrLines.push("_ZOOM _E");
+      scrLines.push(`_SAVEAS 2018 GeoDev_Drawing_${stamp}.dwg`);
+      setTimeout(() => {
+        downloadBlob(scrLines.join("\r\n") + "\r\n", `GeoDev_AutoSaveDWG_${stamp}.scr`, "text/plain;charset=ascii;");
+      }, 350);
+      showExcelLog("تم تحميل ملف اللوحة وسكريبت الحفظ التلقائي بصيغة AutoCAD DWG.", "success");
       return;
     }
 
+    // 6. تصدير Sokkia STR / SDR للتوتال ستيشن
+    if (format === "str" || format === "sdr") {
+      const extName = format === "str" ? "str" : "sdr";
+      const sdrLines = ["00NMSDR33 V04-04.02  GEODEV STAKEOUT"];
+      targetRows.forEach((r, idx) => {
+        const p = String(r[pKey] || idx + 1).padEnd(16, " ").slice(0, 16);
+        const n = (parseFloat(r[nKey]) || 0).toFixed(3).padStart(16, " ");
+        const e = (parseFloat(r[eKey]) || 0).toFixed(3).padStart(16, " ");
+        const z = (parseFloat(r[zKey]) || 0).toFixed(3).padStart(16, " ");
+        const c = String(r[cKey] || "").padEnd(16, " ").slice(0, 16);
+        sdrLines.push(`08KI${p}${n}${e}${z}${c}`);
+      });
+      downloadBlob(sdrLines.join("\r\n") + "\r\n", `GeoDev_TotalStation_${scopeMode}_${Date.now()}.${extName}`, "text/plain;charset=ascii;");
+      showExcelLog(`تم تصدير ${targetRows.length} نقطة بصيغة التوتال ستيشن (.${extName}) جاهزة للرفع على الجهاز.`, "success");
+      return;
+    }
+
+    // 7. تصدير Leica GSI
+    if (format === "gsi") {
+      const gsiLines = targetRows.map((r, idx) => {
+        const p = String(r[pKey] || idx + 1).padStart(16, "0");
+        const eMm = Math.round((parseFloat(r[eKey]) || 0) * 1000);
+        const nMm = Math.round((parseFloat(r[nKey]) || 0) * 1000);
+        const zMm = Math.round((parseFloat(r[zKey]) || 0) * 1000);
+        const fmt = val => (val >= 0 ? "+" : "-") + String(Math.abs(val)).padStart(16, "0");
+        return `11${String(idx + 1).padStart(4, "0")}+${p} 81..10${fmt(eMm)} 82..10${fmt(nMm)} 83..10${fmt(zMm)}`;
+      });
+      downloadBlob(gsiLines.join("\r\n") + "\r\n", `GeoDev_Leica_${scopeMode}_${Date.now()}.gsi`, "text/plain;charset=ascii;");
+      showExcelLog("تم تصدير ملف Leica GSI (.gsi) بنجاح.", "success");
+      return;
+    }
+
+    // 8. تصدير Surfer DAT
     if (format === "surfer") {
       const datLines = ["Easting,Northing,Elevation,PointID,Code"];
-      rows.forEach(r => {
+      targetRows.forEach((r, idx) => {
         const e = parseFloat(r[eKey]);
         const n = parseFloat(r[nKey]);
         const z = parseFloat(r[zKey]) || 0;
-        const p = String(r[pKey] || "");
+        const p = String(r[pKey] || idx + 1);
         const c = String(r[cKey] || "");
         if (!isNaN(e) && !isNaN(n)) datLines.push(`${e.toFixed(4)},${n.toFixed(4)},${z.toFixed(4)},${p},${c}`);
       });
-      downloadBlob(datLines.join("\r\n") + "\r\n", `GeoDev_Surfer_${Date.now()}.dat`, "text/plain;charset=utf-8;");
-      showExcelLog("🏔️ تم تصدير ملف Golden Software Surfer (.dat) بنجاح!", "success");
+      downloadBlob(datLines.join("\r\n") + "\r\n", `GeoDev_Surfer_${scopeMode}_${Date.now()}.dat`, "text/plain;charset=ascii;");
+      showExcelLog("تم تصدير ملف Golden Software Surfer (.dat) بنجاح.", "success");
       return;
     }
 
+    // 9. تصدير ArcGIS Pro WKT CSV
     if (format === "wkt") {
       const wktHeader = [...columns, "AI_Category", "CAD_Layer", "GEOMETRY_WKT"].join(",");
-      const wktRows = rows.map(r => {
+      const wktRows = targetRows.map(r => {
         const e = parseFloat(r[eKey]);
         const n = parseFloat(r[nKey]);
         const z = parseFloat(r[zKey]) || 0;
@@ -1227,12 +1521,13 @@
         return [...vals, `"${cls.labelAr}"`, `"${cls.layer}"`, geom].join(",");
       });
       downloadBlob("\uFEFF" + [wktHeader, ...wktRows].join("\n"), `GeoDev_ArcGISPro_WKT_${Date.now()}.csv`, "text/csv;charset=utf-8;");
-      showExcelLog("📊 تم تصدير جدول ArcGIS Pro بالتصنيف الهندسي وحقل POINT Z!", "success");
+      showExcelLog("تم تصدير جدول ArcGIS Pro بالتصنيف الهندسي وحقل POINT Z.", "success");
       return;
     }
 
+    // 10. تصدير ArcGIS Pro / QGIS GeoJSON
     if (format === "geojson") {
-      const features = rows
+      const features = targetRows
         .map(r => {
           const e = parseFloat(r[eKey]);
           const n = parseFloat(r[nKey]);
@@ -1250,106 +1545,32 @@
         })
         .filter(Boolean);
 
-      downloadBlob(JSON.stringify({ type: "FeatureCollection", features }, null, 2), `GeoDev_ArcGIS_QGIS_${Date.now()}.geojson`, "application/geo+json;charset=utf-8;");
-      showExcelLog("🗺️ تم تصدير طبقة GeoJSON لـ ArcGIS Pro و QGIS بالتصنيف الكامل!", "success");
+      downloadBlob(JSON.stringify({ type: "FeatureCollection", features }, null, 2), `GeoDev_GIS_${scopeMode}_${Date.now()}.geojson`, "application/geo+json;charset=utf-8;");
+      showExcelLog("تم تصدير طبقة GeoJSON لـ ArcGIS Pro و QGIS بنجاح.", "success");
       return;
     }
 
+    // 11. تصدير Google Earth KML
     if (format === "kml") {
-      const marks = rows
-        .map(r => {
+      const marks = targetRows
+        .map((r, idx) => {
           const e = parseFloat(r[eKey]);
           const n = parseFloat(r[nKey]);
           const z = parseFloat(r[zKey]) || 0;
           if (isNaN(e) || isNaN(n)) return "";
           const ll = projectToWGS84(e, n);
           const cls = getRowClassification(r);
-          return `<Placemark><name>${String(r[pKey] || "")} (${cls.labelAr})</name><description>E=${e} | N=${n} | Z=${z} | Code=${String(r[cKey] || "")}</description><Point><coordinates>${ll.lon.toFixed(7)},${ll.lat.toFixed(7)},${z}</coordinates></Point></Placemark>`;
+          return `<Placemark><name>${String(r[pKey] || idx + 1)} (${cls.labelAr})</name><description>E=${e} | N=${n} | Z=${z}</description><Point><coordinates>${ll.lon.toFixed(7)},${ll.lat.toFixed(7)},${z}</coordinates></Point></Placemark>`;
         })
         .join("\n");
       const kml = `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>GeoDev Survey</name>\n${marks}\n</Document></kml>`;
-      downloadBlob(kml, `GeoDev_GoogleEarth_${Date.now()}.kml`, "application/vnd.google-earth.kml+xml;charset=utf-8;");
-      showExcelLog("🛰️ تم تصدير ملف Google Earth (.kml)!", "success");
-      return;
-    }
-
-    if (format === "sdr") {
-      const sdrLines = ["00NMSDR33 V04-04.02  GEODEV STAKEOUT"];
-      rows.forEach(r => {
-        const p = String(r[pKey] || "").padEnd(16, " ").slice(0, 16);
-        const n = (parseFloat(r[nKey]) || 0).toFixed(3).padStart(16, " ");
-        const e = (parseFloat(r[eKey]) || 0).toFixed(3).padStart(16, " ");
-        const z = (parseFloat(r[zKey]) || 0).toFixed(3).padStart(16, " ");
-        const c = String(r[cKey] || "").padEnd(16, " ").slice(0, 16);
-        sdrLines.push(`08KI${p}${n}${e}${z}${c}`);
-      });
-      downloadBlob(sdrLines.join("\r\n") + "\r\n", `GeoDev_Sokkia_${Date.now()}.sdr`, "text/plain;charset=utf-8;");
-      showExcelLog("📡 تم تصدير ملف Sokkia SDR (.sdr)!", "success");
-      return;
-    }
-
-    if (format === "gsi") {
-      const gsiLines = rows.map((r, idx) => {
-        const p = String(r[pKey] || idx + 1).padStart(16, "0");
-        const eMm = Math.round((parseFloat(r[eKey]) || 0) * 1000);
-        const nMm = Math.round((parseFloat(r[nKey]) || 0) * 1000);
-        const zMm = Math.round((parseFloat(r[zKey]) || 0) * 1000);
-        const fmt = val => (val >= 0 ? "+" : "-") + String(Math.abs(val)).padStart(16, "0");
-        return `11${String(idx + 1).padStart(4, "0")}+${p} 81..10${fmt(eMm)} 82..10${fmt(nMm)} 83..10${fmt(zMm)}`;
-      });
-      downloadBlob(gsiLines.join("\r\n") + "\r\n", `GeoDev_Leica_${Date.now()}.gsi`, "text/plain;charset=utf-8;");
-      showExcelLog("📡 تم تصدير ملف Leica GSI (.gsi)!", "success");
-      return;
-    }
-
-    if (format === "csv") {
-      const csvLines = rows
-        .filter(r => !isNaN(parseFloat(r[eKey])) && !isNaN(parseFloat(r[nKey])))
-        .map(r => [r[pKey] || "", r[eKey] || "", r[nKey] || "", r[zKey] || "0", r[cKey] || ""].join(","));
-      downloadBlob("\uFEFF" + csvLines.join("\n"), `GeoDev_Civil3D_PENZD_${Date.now()}.csv`, "text/csv;charset=utf-8;");
-      showExcelLog("📘 تم تصدير ملف Civil 3D (PENZD .csv)!", "success");
-      return;
-    }
-
-    if (format === "lsp") {
-      const ptsLisp = rows
-        .map(r => {
-          const e = parseFloat(r[eKey]);
-          const n = parseFloat(r[nKey]);
-          const z = parseFloat(r[zKey]) || 0;
-          const p = String(r[pKey] || "").replace(/"/g, "");
-          const c = String(r[cKey] || "").replace(/"/g, "");
-          if (isNaN(e) || isNaN(n)) return "";
-          const cls = getRowClassification(r);
-          return `  (gd-add-pt "${p}" ${e} ${n} ${z} "${c}" "${cls.layer}" ${cls.dxfColor})`;
-        })
-        .filter(Boolean)
-        .join("\n");
-
-      const lispCode = `;;; GeoDev Smart AutoLISP Point Plotter - Command: GD_PLOT_PTS
-(defun c:GD_PLOT_PTS (/ oldosm)
-  (setq oldosm (getvar "OSMODE"))
-  (setvar "OSMODE" 0)
-  (setvar "PDMODE" 34)
-  (setvar "PDSIZE" 0.5)
-  (defun gd-add-pt (pid x y z code lyr col)
-    (entmake (list '(0 . "POINT") (cons 8 lyr) (cons 62 col) (list 10 x y z)))
-    (entmake (list '(0 . "TEXT") (cons 8 (strcat lyr "_TXT")) (cons 62 col) (list 10 (+ x 0.4) (+ y 0.4) z) '(40 . 0.55) (cons 1 (strcat pid " | Z=" (rtos z 2 3) " " code))))
-  )
-${ptsLisp}
-  (setvar "OSMODE" oldosm)
-  (command "_.ZOOM" "_E")
-  (princ "\\n[GeoDev] Plotted all classified survey points!")
-  (princ)
-)
-`;
-      downloadBlob(lispCode, `GeoDev_SmartPlot_${Date.now()}.lsp`, "text/plain;charset=utf-8;");
-      showExcelLog("⚡ تم تصدير ملف AutoLISP الذكي (.lsp) مقسماً لطبقات الأوتوكاد!", "success");
+      downloadBlob(kml, `GeoDev_GoogleEarth_${scopeMode}_${Date.now()}.kml`, "application/vnd.google-earth.kml+xml;charset=utf-8;");
+      showExcelLog("تم تصدير ملف Google Earth (.kml) بنجاح.", "success");
     }
   }
 
   /* ============================================================================
-     محرك الأوامر الذكية (تصنيف الأكواد + فحص QA/QC + الحسابات المساحية)
+     محرك الأوامر الذكية
      ============================================================================ */
   function runAutoCodeClassification() {
     saveSnapshot();
@@ -1366,13 +1587,13 @@ ${ptsLisp}
     renderExcelTable();
     drawCadPreview();
     showExcelLog(
-      `🏷️ تم تصنيف جميع النقاط هندسياً: [${st.sewerCount} مطبق وصرف MNH] • [${st.lightCount} عمود إنارة] • [${st.nglCount} أرض طبيعية] • [${st.roadCount} طرق] • [${st.dirCount} شمال/جنوب].`,
+      `تم تصنيف النقاط هندسياً: [${st.sewerCount} صرف MNH] • [${st.lightCount} إنارة] • [${st.treeCount} أشجار] • [${st.nglCount} أرض طبيعية] • [${st.roadCount} طرق].`,
       "success"
     );
   }
 
   function runSurveyQAQC() {
-    const { pKey, eKey, nKey, zKey, cKey } = getCoordKeys();
+    const { eKey, nKey, zKey, cKey } = getCoordKeys();
     let zeroCoords = 0, missingCodes = 0, zJumps = 0, duplicates = 0;
     const seen = new Set();
 
@@ -1396,7 +1617,7 @@ ${ptsLisp}
     }
 
     showExcelLog(
-      `🩺 تقرير فحص الجودة (QA/QC): [${duplicates} نقطة مكررة] • [${missingCodes} نقطة بدون كود] • [${zJumps} قفزة شاذة في المنسوب Z > 5م] • [${zeroCoords} إحداثي صفري].`,
+      `تقرير فحص الجودة (QA/QC): [${duplicates} مكررة] • [${missingCodes} بدون كود] • [${zJumps} قفزة شاذة في Z > 5م] • [${zeroCoords} إحداثي صفري].`,
       duplicates || zJumps || zeroCoords ? "warn" : "success"
     );
   }
@@ -1410,7 +1631,7 @@ ${ptsLisp}
       return;
     }
 
-    if (/تصنيف|صنف|اكواد|أكواد|mnh|انارة|إنارة|صرف/i.test(cmd)) {
+    if (/تصنيف|صنف|اكواد|أكواد|mnh|انارة|إنارة|صرف|شجر/i.test(cmd)) {
       runAutoCodeClassification();
       return;
     }
@@ -1427,7 +1648,7 @@ ${ptsLisp}
       rows.forEach((r, idx) => { r[pKey] = String(idx + 1); });
       renderExcelTable();
       drawCadPreview();
-      showExcelLog(`🔢 تم إعادة ترقيم جميع النقاط تسلسلياً من 1 إلى ${rows.length}.`, "success");
+      showExcelLog(`تم إعادة ترقيم جميع النقاط تسلسلياً من 1 إلى ${rows.length}.`, "success");
       return;
     }
 
@@ -1439,7 +1660,7 @@ ${ptsLisp}
       });
       renderExcelTable();
       resetCadView();
-      showExcelLog("🔄 تم تبديل إحداثيات الشرق (E) والشمال (N) لجميع النقاط.", "success");
+      showExcelLog("تم تبديل إحداثيات الشرق (E) والشمال (N) لجميع النقاط.", "success");
       return;
     }
 
@@ -1467,7 +1688,7 @@ ${ptsLisp}
       });
       renderExcelTable();
       drawCadPreview();
-      showExcelLog(`✅ تم تعديل عمود «${targetCol}» (${op} ${num}) لجميع النقاط.`, "success");
+      showExcelLog(`تم تعديل عمود «${targetCol}» (${op} ${num}) لجميع النقاط.`, "success");
       return;
     }
 
@@ -1488,7 +1709,7 @@ ${ptsLisp}
         rows[i].Azimuth_deg = az.toFixed(4) + "°";
       }
       renderExcelTable();
-      showExcelLog("✅ تم حساب المسافة والانحراف وإضافتهما كأعمدة جديدة.", "success");
+      showExcelLog("تم حساب المسافة والانحراف وإضافتهما كأعمدة جديدة.", "success");
       return;
     }
 
@@ -1497,7 +1718,7 @@ ${ptsLisp}
       const feddan = st.areaM2 / 4200.83;
       const qirat = (feddan % 1) * 24;
       const sahm = (qirat % 1) * 24;
-      showExcelLog(`📐 المساحة = ${st.areaM2.toFixed(2)} م² (${Math.floor(feddan)} فدان، ${Math.floor(qirat)} قيراط، ${sahm.toFixed(1)} سهم) | المحيط = ${st.perimeter.toFixed(2)} م`, "success");
+      showExcelLog(`المساحة = ${st.areaM2.toFixed(2)} م² (${Math.floor(feddan)} فدان، ${Math.floor(qirat)} قيراط، ${sahm.toFixed(1)} سهم) | المحيط = ${st.perimeter.toFixed(2)} م`, "success");
       return;
     }
 
@@ -1512,16 +1733,16 @@ ${ptsLisp}
       });
       renderExcelTable();
       drawCadPreview();
-      showExcelLog(`🧹 تم حذف ${before - rows.length} نقطة مكررة.`, "success");
+      showExcelLog(`تم حذف ${before - rows.length} نقطة مكررة.`, "success");
       return;
     }
 
     if (/حفظ|احفظ|تصدير|صدر/i.test(cmd)) {
-      exportCleanHeaderlessExcel("xlsx_penzd");
+      exportData("civil3d_csv");
       return;
     }
 
-    showExcelLog(`جرّب: "صنف الأكواد تلقائياً" أو "افحص أخطاء الرفع" أو "اجمع 0.50 على Z" أو "احسب المساحة".`, "info");
+    showExcelLog(`أدخل أمراً مثل: "صنف الأكواد تلقائياً" أو "افحص أخطاء الرفع" أو "اجمع 0.50 على Z" أو "احسب المساحة".`, "info");
   }
 
   /* ============================================================================
@@ -1548,22 +1769,23 @@ ${ptsLisp}
     if (statsBar) {
       statsBar.innerHTML = `
         <div class="gd-ex-stat"><span>إجمالي النقاط</span><strong>${st.count}</strong></div>
-        <div class="gd-ex-stat"><span>مطابق وصرف (MNH)</span><strong style="color:#fb923c;">${st.sewerCount}</strong></div>
-        <div class="gd-ex-stat"><span>أعمدة إنارة</span><strong style="color:#facc15;">${st.lightCount}</strong></div>
-        <div class="gd-ex-stat"><span>أرض طبيعية (EG)</span><strong style="color:#4ade80;">${st.nglCount}</strong></div>
-        <div class="gd-ex-stat"><span>شمال / جنوب</span><strong style="color:#38bdf8;">${st.dirCount}</strong></div>
+        <div class="gd-ex-stat"><span>صرف صحي (MNH)</span><strong style="color:#fb923c;">${st.sewerCount}</strong></div>
+        <div class="gd-ex-stat"><span>أعمدة إنارة (LP)</span><strong style="color:#eab308;">${st.lightCount}</strong></div>
+        <div class="gd-ex-stat"><span>أشجار (TREE)</span><strong style="color:#22c55e;">${st.treeCount}</strong></div>
+        <div class="gd-ex-stat"><span>أرض طبيعية (EG)</span><strong style="color:#10b981;">${st.nglCount}</strong></div>
         <div class="gd-ex-stat"><span>المساحة المغلقة</span><strong>${st.areaM2.toFixed(1)} م²</strong></div>
       `;
     }
 
     if (filterBar) {
       const filters = [
-        { id: "ALL", label: `📋 الكل (${st.count})` },
-        { id: "SEWER", label: `🕳️ الصرف والمطابق (${st.sewerCount})` },
-        { id: "LIGHT", label: `💡 أعمدة الإنارة (${st.lightCount})` },
-        { id: "NGL", label: `⛰️ أرض طبيعية EG (${st.nglCount})` },
-        { id: "ROAD", label: `🛣️ طرق وأرصفة (${st.roadCount})` },
-        { id: "DIR", label: `🧭 شمال / جنوب (${st.dirCount})` }
+        { id: "ALL", label: `الكل (${st.count})` },
+        { id: "LIGHT", label: `أعمدة الإنارة (${st.lightCount})` },
+        { id: "SEWER", label: `الصرف والمطابق MNH (${st.sewerCount})` },
+        { id: "TREES", label: `الأشجار (${st.treeCount})` },
+        { id: "NGL", label: `أرض طبيعية EG (${st.nglCount})` },
+        { id: "ROAD", label: `طرق وأرصفة (${st.roadCount})` },
+        { id: "DIR", label: `شمال / جنوب (${st.dirCount})` }
       ];
       filterBar.innerHTML = filters
         .map(f => `<button type="button" class="gd-ex-filter-pill ${activeCodeFilter === f.id ? "active" : ""}" data-code-filter="${f.id}">${f.label}</button>`)
@@ -1576,7 +1798,7 @@ ${ptsLisp}
       <thead>
         <tr>
           <th>#</th>
-          <th>التصنيف الذكي</th>
+          <th>التصنيف الهندسي</th>
           ${columns.map(col => `<th>${col}</th>`).join("")}
           <th>حذف</th>
         </tr>
@@ -1584,8 +1806,8 @@ ${ptsLisp}
       <tbody>
         ${filtered.map(({ r, originalIdx, cls }) => `
           <tr>
-            <td style="background:#211e1b;color:#a8a29e;font-weight:800;padding:6px 8px;">${originalIdx + 1}</td>
-            <td style="padding:5px 8px;white-space:nowrap;font-size:11px;font-weight:900;color:${cls.color};background:#12100e;">
+            <td style="background:var(--ex-th-bg);color:var(--ex-muted);font-weight:800;padding:6px 8px;">${originalIdx + 1}</td>
+            <td style="padding:5px 8px;white-space:nowrap;font-size:11px;font-weight:900;color:${cls.color};">
               ${cls.labelAr}
             </td>
             ${columns.map(col => `
@@ -1596,7 +1818,7 @@ ${ptsLisp}
               </td>
             `).join("")}
             <td>
-              <button type="button" style="background:transparent;border:0;color:#f87171;cursor:pointer;font-weight:900;padding:6px 9px;"
+              <button type="button" style="background:transparent;border:0;color:#ef4444;cursor:pointer;font-weight:900;padding:6px 9px;"
                 data-del-row="${originalIdx}">✕</button>
             </td>
           </tr>
@@ -1612,7 +1834,7 @@ ${ptsLisp}
     const rect = canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
     const W = rect.width || 320;
-    const H = rect.height || 320;
+    const H = rect.height || 310;
 
     canvas.width = Math.max(300, W * dpr);
     canvas.height = Math.max(250, H * dpr);
@@ -1666,7 +1888,6 @@ ${ptsLisp}
       y: centerY - (n - midN) * scale
     });
 
-    // رسم خطوط التوصيل (إما حسب الكود أو متسلسلة)
     if (connectMode === "SEQUENTIAL" && pts.length >= 2) {
       ctx.beginPath();
       ctx.strokeStyle = "#38bdf8";
@@ -1680,7 +1901,7 @@ ${ptsLisp}
     } else if (connectMode === "BY_CODE") {
       const groups = {};
       pts.forEach(pt => {
-        if (pt.cls.group === "LIGHT" || pt.cls.group === "NGL") return; // لا نوصل أعمدة الإنارة ببعضها كخط أرض
+        if (pt.cls.group === "LIGHT" || pt.cls.group === "TREES" || pt.cls.group === "NGL") return;
         if (!groups[pt.cls.layer]) groups[pt.cls.layer] = [];
         groups[pt.cls.layer].push(pt);
       });
@@ -1708,14 +1929,12 @@ ${ptsLisp}
 
     const allowText = showLabelsOnCanvas && (visiblePts.length <= 80 || cadZoom >= 2.2);
 
-    // رسم الرموز الهندسية المميزة لكل كود
     visiblePts.forEach(pt => {
       ctx.strokeStyle = pt.cls.color;
       ctx.fillStyle = pt.cls.color;
       ctx.lineWidth = 1.6;
 
       if (pt.cls.symbol === "MANHOLE") {
-        // رمز مطبق صرف صحي MNH: دائرة مزدوجة برتقالية
         ctx.beginPath();
         ctx.arc(pt.cx, pt.cy, 5.5, 0, Math.PI * 2);
         ctx.stroke();
@@ -1723,7 +1942,6 @@ ${ptsLisp}
         ctx.arc(pt.cx, pt.cy, 2.2, 0, Math.PI * 2);
         ctx.fill();
       } else if (pt.cls.symbol === "LIGHT") {
-        // رمز عمود إنارة: دائرة صفراء مع إشعاع
         ctx.beginPath();
         ctx.arc(pt.cx, pt.cy, 4, 0, Math.PI * 2);
         ctx.fill();
@@ -1731,8 +1949,15 @@ ${ptsLisp}
         ctx.moveTo(pt.cx - 7, pt.cy); ctx.lineTo(pt.cx + 7, pt.cy);
         ctx.moveTo(pt.cx, pt.cy - 7); ctx.lineTo(pt.cx, pt.cy + 7);
         ctx.stroke();
+      } else if (pt.cls.symbol === "TREE") {
+        ctx.beginPath();
+        ctx.arc(pt.cx, pt.cy, 5, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(pt.cx - 3.5, pt.cy - 3.5); ctx.lineTo(pt.cx + 3.5, pt.cy + 3.5);
+        ctx.moveTo(pt.cx + 3.5, pt.cy - 3.5); ctx.lineTo(pt.cx - 3.5, pt.cy + 3.5);
+        ctx.stroke();
       } else if (pt.cls.symbol === "TRIANGLE") {
-        // رمز روبير BM: مثلث
         ctx.beginPath();
         ctx.moveTo(pt.cx, pt.cy - 6);
         ctx.lineTo(pt.cx - 5.5, pt.cy + 4.5);
@@ -1831,6 +2056,69 @@ ${ptsLisp}
     });
   }
 
+  /* ============================================================================
+     ربط المساعد الرئيسي للمنصة لتوجيه المستخدمين لقسم المساحة ومحطة الإكسيل
+     ============================================================================ */
+  function setupMainAssistantRouter() {
+    document.addEventListener("click", e => {
+      const sendBtn = e.target.closest("#sendBtn, .send-btn, button[type='submit']");
+      if (!sendBtn) return;
+
+      const chatInput =
+        document.getElementById("userInput") ||
+        document.getElementById("chatInput") ||
+        document.querySelector("#s-chat textarea, #s-chat input[type='text'], #s-assistant textarea");
+
+      if (!chatInput || e.target.closest("#gdAiExcelStudio")) return;
+      const q = String(chatInput.value || "").trim();
+      if (!q) return;
+
+      if (/(اكسيل|إكسيل|excel|penz|penzd|civil\s*3d|sdr|str|توتال|اعمدة\s*انارة|أعمدة\s*إنارة|صرف\s*صحي|mnh|تحويل\s*نقاط)/i.test(q)) {
+        setTimeout(() => {
+          const chatBox =
+            document.getElementById("chatBox") ||
+            document.getElementById("messages") ||
+            document.querySelector("#s-chat .msgs, #s-chat .chat-body");
+          if (!chatBox || document.getElementById("gdAssistantExcelRedirectCard")) return;
+
+          const card = document.createElement("div");
+          card.id = "gdAssistantExcelRedirectCard";
+          card.style.cssText = `
+            direction: rtl; text-align: right; margin: 10px 0; padding: 13px 15px;
+            border-radius: 14px; border: 1.5px solid #e09f24;
+            background: linear-gradient(135deg, #1c1917, #292524); color: #f5f5f4;
+          `;
+          card.innerHTML = `
+            <strong style="color:#fbbf24;font-size:13.5px;display:block;margin-bottom:4px;">
+              توجيه من مساعد GeoDev الهندسي
+            </strong>
+            <p style="margin:0 0 10px;font-size:12.5px;color:#e7e5e4;line-height:1.65;">
+              لإنشاء أو تعديل ملفات الإكسيل المساحية (<b>PENZD / PENZ</b>) وتصنيف نقاط أعمدة الإنارة والصرف الصحي <b>MNH</b> والتصدير المباشر لـ <b>Civil 3D</b> و <b>AutoCAD</b> والتوتال ستيشن، يرجى التوجه إلى <b>قسم المساحة — محطة إكسيل المساحة</b>:
+            </p>
+            <button type="button" id="gdJumpToSurvExcelBtn"
+              style="padding:9px 15px;border-radius:9px;border:0;background:linear-gradient(135deg,#e09f24,#b45309);color:#141210;font-weight:900;font-size:12.5px;cursor:pointer;font-family:inherit;">
+              الانتقال إلى قسم المساحة ومحطة الإكسيل الآن
+            </button>
+          `;
+          chatBox.appendChild(card);
+          chatBox.scrollTop = chatBox.scrollHeight;
+        }, 450);
+      }
+    }, true);
+
+    document.addEventListener("click", e => {
+      if (e.target.closest("#gdJumpToSurvExcelBtn")) {
+        const navButtons = Array.from(document.querySelectorAll("nav button, [data-t]"));
+        const survBtn = navButtons.find(btn => (btn.textContent || "").trim() === "المساحة");
+        if (survBtn) survBtn.click();
+        setTimeout(() => {
+          const studio = document.getElementById("gdAiExcelStudio");
+          if (studio) studio.scrollIntoView({ behavior: "smooth", block: "start" });
+        }, 250);
+      }
+    });
+  }
+
   function findSurveyingSection() {
     const navButtons = Array.from(document.querySelectorAll("nav button, [data-t]"));
     const survBtn = navButtons.find(btn => (btn.textContent || "").trim() === "المساحة");
@@ -1865,6 +2153,7 @@ ${ptsLisp}
       if (!container) {
         container = document.createElement("div");
         container.id = "gdAiExcelStudio";
+        container.dataset.theme = currentTheme;
       }
       if (container.parentElement !== targetSec) {
         container.innerHTML = renderStudioHTML();
@@ -1884,11 +2173,11 @@ ${ptsLisp}
       banner.id = "gdGuestWelcomeBanner";
       banner.innerHTML = `
         <div>
-          <strong>👋 أهلاً بك في منصة GeoDev — جرّب محطة إكسيل المساحة الذكية مجاناً قبل تسجيل الدخول!</strong>
-          <span>ارفع ملفات (Excel / DXF / CSV / SDR) وعاين مطابق MNH وأعمدة الإنارة في لوحة الكاد الحية فوراً. سجّل الدخول لحفظ وتصدير الملفات.</span>
+          <strong>أهلاً بك في منصة GeoDev — جرّب محطة إكسيل المساحة مجاناً قبل تسجيل الدخول</strong>
+          <span>ارفع ملفات (Excel / DXF / CSV / SDR / STR) وعاين النقاط على لوحة الرسم الهندسية فوراً. سجّل الدخول لتفعيل الحفظ والتصدير.</span>
         </div>
         <button type="button" id="gdBannerScrollLoginBtn" class="gd-ex-btn gold">
-          🔐 تسجيل الدخول / إنشاء حساب
+          تسجيل الدخول / إنشاء حساب
         </button>
       `;
       if (guestHost === document.body) document.body.prepend(banner);
@@ -1899,6 +2188,7 @@ ${ptsLisp}
     if (!container) {
       container = document.createElement("div");
       container.id = "gdAiExcelStudio";
+      container.dataset.theme = currentTheme;
       container.innerHTML = renderStudioHTML();
       const bannerEl = document.getElementById("gdGuestWelcomeBanner");
       if (bannerEl && bannerEl.parentElement) bannerEl.insertAdjacentElement("afterend", container);
@@ -1911,6 +2201,19 @@ ${ptsLisp}
 
   function bindEvents() {
     document.addEventListener("click", e => {
+      // زر المصباح لتبديل السمات الثلاث (Themes)
+      if (e.target.closest("#gdCycleThemeBulbBtn")) {
+        const order = ["dark_gold", "light_eng", "cad_blue"];
+        const nextIdx = (order.indexOf(currentTheme) + 1) % order.length;
+        currentTheme = order[nextIdx];
+        localStorage.setItem("gd_excel_theme_v6", currentTheme);
+        const studio = document.getElementById("gdAiExcelStudio");
+        if (studio) studio.dataset.theme = currentTheme;
+        const lbl = document.getElementById("gdThemeBulbLabel");
+        if (lbl) lbl.textContent = getThemeLabel(currentTheme);
+        return;
+      }
+
       if (e.target.closest("#gdBannerScrollLoginBtn")) {
         const authForm = document.querySelector('#authScreen input, #loginScreen input, form input[type="email"], form input[type="password"]');
         if (authForm) {
@@ -1927,17 +2230,23 @@ ${ptsLisp}
       }
 
       if (e.target.closest("#gdExAutoClassifyBtn")) {
-        if (!checkAuthState()) {
-          openAuthRequiredModal("تصنيف الأكواد وإضافة أعمدة الطبقات بالذكاء الاصطناعي");
-          return;
-        }
+        if (!checkAuthState()) return openAuthRequiredModal("تصنيف الأكواد وإضافة أعمدة الطبقات");
         runAutoCodeClassification();
         return;
       }
 
+      // فلترة الفئات (إنارة / صرف MNH / أشجار / طرق...) وتحديث نطاق التصدير تلقائياً
       const filterBtn = e.target.closest("[data-code-filter]");
       if (filterBtn) {
         activeCodeFilter = filterBtn.dataset.codeFilter;
+        const scopeSel = document.getElementById("gdExportTargetScopeSelect");
+        if (scopeSel) {
+          if (activeCodeFilter === "LIGHT") scopeSel.value = "LIGHT";
+          else if (activeCodeFilter === "SEWER") scopeSel.value = "SEWER";
+          else if (activeCodeFilter === "TREES") scopeSel.value = "TREES";
+          else if (activeCodeFilter === "ALL") scopeSel.value = "ALL";
+          else scopeSel.value = "FILTERED";
+        }
         renderExcelTable();
         drawCadPreview();
         return;
@@ -1975,12 +2284,12 @@ ${ptsLisp}
         rows.push(...extracted);
         renderExcelTable();
         resetCadView();
-        showExcelLog(`📐 تم استخراج ${extracted.length} نقطة وعرضها في لوحة الكاد!`, "success");
+        showExcelLog(`تم استخراج ${extracted.length} نقطة وعرضها في لوحة الكاد.`, "success");
         return;
       }
 
       if (e.target.closest("#gdApplyShiftBtn")) {
-        if (!checkAuthState()) return openAuthRequiredModal("تطبيق إزاحة الإحداثيات وحفظ التعديلات");
+        if (!checkAuthState()) return openAuthRequiredModal("تطبيق إزاحة الإحداثيات");
         const dE = parseFloat(document.getElementById("gdShiftE")?.value) || 0;
         const dN = parseFloat(document.getElementById("gdShiftN")?.value) || 0;
         const dZ = parseFloat(document.getElementById("gdShiftZ")?.value) || 0;
@@ -1994,12 +2303,12 @@ ${ptsLisp}
         });
         renderExcelTable();
         drawCadPreview();
-        showExcelLog(`✅ تم تطبيق إزاحة الإحداثيات (ΔE=${dE}, ΔN=${dN}, ΔZ=${dZ}).`, "success");
+        showExcelLog(`تم تطبيق إزاحة الإحداثيات (ΔE=${dE}, ΔN=${dN}, ΔZ=${dZ}).`, "success");
         return;
       }
 
       if (e.target.closest("#gdCalcCutFillBtn")) {
-        if (!checkAuthState()) return openAuthRequiredModal("حساب كميات الحفر والردم وتصديرها");
+        if (!checkAuthState()) return openAuthRequiredModal("حساب كميات الحفر والردم");
         const designLvl = parseFloat(document.getElementById("gdDesignLevelInput")?.value);
         if (isNaN(designLvl)) return showExcelLog("أدخل منسوب التصميم أولاً.", "error");
         saveSnapshot();
@@ -2013,7 +2322,7 @@ ${ptsLisp}
           }
         });
         renderExcelTable();
-        showExcelLog(`🧮 تم حساب الحفر والردم مقارنة بمنسوب ${designLvl} م.`, "success");
+        showExcelLog(`تم حساب الحفر والردم مقارنة بمنسوب ${designLvl} م.`, "success");
         return;
       }
 
@@ -2027,7 +2336,7 @@ ${ptsLisp}
         });
         renderExcelTable();
         resetCadView();
-        showExcelLog("🔄 تم تبديل إحداثيات الشرق (E) والشمال (N).", "success");
+        showExcelLog("تم تبديل إحداثيات الشرق (E) والشمال (N).", "success");
         return;
       }
 
@@ -2046,7 +2355,7 @@ ${ptsLisp}
       if (e.target.closest("#gdExUndoBtn")) { undoLastAction(); return; }
 
       if (e.target.closest("#gdExClearBtn")) {
-        if (!confirm("هل تريد مسح جميع النقاط من الجدول؟")) return;
+        if (!confirm("هل تريد تفريغ جميع النقاط من الجدول؟")) return;
         saveSnapshot();
         rows = [];
         renderExcelTable();
@@ -2069,13 +2378,13 @@ ${ptsLisp}
       if (cycleBtn) {
         if (connectMode === "BY_CODE") {
           connectMode = "SEQUENTIAL";
-          cycleBtn.textContent = "📏 توصيل: متسلسل";
+          cycleBtn.textContent = "التوصيل: متسلسل";
         } else if (connectMode === "SEQUENTIAL") {
           connectMode = "NONE";
-          cycleBtn.textContent = "📏 توصيل: بدون خطوط";
+          cycleBtn.textContent = "التوصيل: بدون خطوط";
         } else {
           connectMode = "BY_CODE";
-          cycleBtn.textContent = "📏 توصيل: حسب الكود";
+          cycleBtn.textContent = "التوصيل: حسب الكود";
         }
         drawCadPreview();
         return;
@@ -2110,6 +2419,14 @@ ${ptsLisp}
       if (e.target.id === "gdCrsSelect") {
         crsMode = e.target.value;
         showExcelLog(`تم ضبط نظام الإحداثيات الجغرافي إلى: ${crsMode}`, "info");
+        return;
+      }
+      if (e.target.id === "gdExportColOrderSelect") {
+        exportColOrder = e.target.value;
+        return;
+      }
+      if (e.target.id === "gdExportTargetScopeSelect") {
+        exportTargetScope = e.target.value;
       }
     });
 
@@ -2147,6 +2464,7 @@ ${ptsLisp}
     ensureSheetJS();
     injectStyles();
     bindEvents();
+    setupMainAssistantRouter();
     mountAIExcelStudio();
     startAuthWatcher();
   }
