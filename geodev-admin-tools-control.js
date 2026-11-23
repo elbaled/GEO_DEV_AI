@@ -1,18 +1,21 @@
 /* ============================================================================
-   GeoDev Admin Tools & Tiers Controller (V1.3 - 2-Day Free Trial Edition)
-   - يمنح المستخدم فترة تجربة مجانية يومين فقط (48 ساعة) للأدوات المدفوعة (PLUS / PRO)
-   - يخصم يوماً تلقائياً من المستخدمين المسجلين سابقاً (يحسب 48 ساعة من startedAt)
-   - بعد انتهاء اليومين: يغلق الأداة ويعرض رسالة الاشتراك والترقية فوراً
+   GeoDev Admin Tools, 2-Day Trials & Tutorial Video Gate (V1.4)
+   - يعرض نافذة إجبارية (قابلة للإلغاء) لفيديو شرح استخدام الأداة لجميع الحسابات
+   - يمنح فترة تجربة مجانية يومين (48 ساعة) للأدوات المدفوعة (PLUS / PRO)
+   - لوحة تحكم الأدمن لتحديد مستوى الوصول لكل أداة (مجاني / PLUS / PRO / مقفول)
    ============================================================================ */
 (function () {
   "use strict";
-  if (window.GeoDevAdminToolsCtrlV13Init) return;
-  window.GeoDevAdminToolsCtrlV13Init = true;
+  if (window.GeoDevAdminToolsCtrlV14Init) return;
+  window.GeoDevAdminToolsCtrlV14Init = true;
 
   const ADMIN_EMAIL = "eng.ahmedsamir.gis@gmail.com";
   const STORAGE_KEY = "gd_custom_tools_permissions_v1";
   const TRIAL_LOCAL_KEY = "gd_tools_trials_v1";
-  const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000; // 48 ساعة (يومين فقط)
+  const TUTORIAL_SEEN_PREFIX = "gd_excel_tut_v1_seen_";
+  const TUTORIAL_VIDEO_ID = "JrYV7iNl66I";
+  const TUTORIAL_VIDEO_URL = "https://youtu.be/JrYV7iNl66I?si=w-bQyCGmFcvzyjpf";
+  const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000; // 48 ساعة
 
   const managedTools = [
     {
@@ -53,7 +56,7 @@
   ];
 
   let permissionsMap = {};
-  let userTrialsMap = {}; // { [toolId]: startTimestampMs }
+  let userTrialsMap = {};
   let userTier = "free";
   let currentUid = null;
   let isRendering = false;
@@ -68,6 +71,126 @@
     return null;
   }
 
+  /* ============================================================================
+     نافذة فيديو شرح استخدام الأداة (تظهر لجميع الحسابات وتغلق الاستخدام حتى المشاهدة أو الإلغاء)
+     ============================================================================ */
+  function getTutorialStorageKey() {
+    return TUTORIAL_SEEN_PREFIX + (currentUid || "guest");
+  }
+
+  function hasSeenTutorial() {
+    try {
+      return localStorage.getItem(getTutorialStorageKey()) === "1";
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function markTutorialSeen() {
+    try {
+      localStorage.setItem(getTutorialStorageKey(), "1");
+    } catch (_) {}
+
+    if (currentUid) {
+      const db = getDb();
+      if (db) {
+        db.collection("users").doc(currentUid).set(
+          { excelTutorialSeenV1: true, excelTutorialSeenAt: Date.now() },
+          { merge: true }
+        ).catch(() => {});
+      }
+    }
+  }
+
+  function openToolTutorialModal(forceShow = false) {
+    if (!forceShow && hasSeenTutorial()) return;
+    if (document.getElementById("gdToolTutorialGateModal")) return;
+
+    const studioEl = document.getElementById("gdAiExcelStudio");
+    if (!studioEl && !forceShow) return;
+
+    const overlay = document.createElement("div");
+    overlay.id = "gdToolTutorialGateModal";
+    overlay.style.cssText = `
+      position: fixed; inset: 0; z-index: 999999;
+      background: rgba(10, 9, 8, 0.90); backdrop-filter: blur(7px);
+      display: flex; align-items: center; justify-content: center;
+      padding: 14px; direction: rtl; font-family: inherit;
+    `;
+
+    overlay.innerHTML = `
+      <div style="width:100%;max-width:560px;background:linear-gradient(165deg,#1c1917,#141210);border:2px solid #e09f24;border-radius:18px;padding:18px;color:#f5f5f4;box-shadow:0 25px 65px rgba(0,0,0,0.85);">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding-bottom:10px;border-bottom:1px solid #3f3a36;margin-bottom:12px;">
+          <div>
+            <span style="display:inline-block;background:rgba(224,159,36,0.18);border:1px solid #e09f24;color:#fbbf24;font-size:11px;font-weight:900;padding:2px 9px;border-radius:999px;margin-bottom:4px;">
+              دليل التشغيل السريع
+            </span>
+            <h3 style="margin:0;font-size:17.5px;font-weight:900;color:#fbbf24;">
+              شاهد فيديو كيفية استخدام الأداة
+            </h3>
+          </div>
+          <button type="button" id="gdCloseTutorialTopX" title="إلغاء"
+            style="width:34px;height:34px;border-radius:9px;border:1px solid #44403c;background:#292524;color:#d6d3d1;font-size:16px;font-weight:900;cursor:pointer;">
+            ✕
+          </button>
+        </div>
+
+        <p style="margin:0 0 12px;font-size:13px;color:#d6d3d1;line-height:1.65;">
+          قبل البدء في استخدام <b>محطة إكسيل المساحة الذكية</b>، شاهد هذا الشرح العملي السريع لكيفية رفع الملفات وتصنيف الأكواد والتصدير إلى Civil 3D و AutoCAD، أو اضغط <b>إلغاء</b> للدخول مباشرة:
+        </p>
+
+        <div style="position:relative;width:100%;padding-top:56.25%;border-radius:12px;overflow:hidden;border:1.5px solid #38bdf8;background:#000;margin-bottom:14px;">
+          <iframe
+            src="https://www.youtube.com/embed/${TUTORIAL_VIDEO_ID}?rel=0&modestbranding=1"
+            title="شاهد فيديو كيفية استخدام الأداة"
+            style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            allowfullscreen>
+          </iframe>
+        </div>
+
+        <div style="display:flex;flex-wrap:wrap;gap:9px;justify-content:space-between;align-items:center;">
+          <a href="${TUTORIAL_VIDEO_URL}" target="_blank" rel="noopener noreferrer"
+             style="flex:1;min-width:170px;padding:11px 14px;border-radius:11px;background:linear-gradient(135deg,#e09f24,#b45309);color:#141210;font-size:13.5px;font-weight:900;text-align:center;text-decoration:none;">
+            ▶ فتح الفيديو على YouTube
+          </a>
+          <button type="button" id="gdCancelTutorialBtn"
+            style="flex:1;min-width:140px;padding:11px 14px;border-radius:11px;border:1.5px solid #57534e;background:#292524;color:#f5f5f4;font-size:13.5px;font-weight:900;cursor:pointer;font-family:inherit;">
+            إلغاء / متابعة للأداة
+          </button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    const closeAndDismiss = () => {
+      markTutorialSeen();
+      overlay.remove();
+    };
+
+    document.getElementById("gdCancelTutorialBtn").onclick = closeAndDismiss;
+    document.getElementById("gdCloseTutorialTopX").onclick = closeAndDismiss;
+  }
+
+  function injectRewatchTutorialButton() {
+    const headerActions = document.querySelector("#gdAiExcelStudio .gd-ex-header-actions");
+    if (!headerActions || document.getElementById("gdRewatchTutorialBtn")) return;
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.id = "gdRewatchTutorialBtn";
+    btn.className = "gd-theme-bulb-btn";
+    btn.style.borderColor = "#38bdf8";
+    btn.style.color = "#38bdf8";
+    btn.textContent = "▶ شرح الأداة";
+    btn.onclick = () => openToolTutorialModal(true);
+    headerActions.prepend(btn);
+  }
+
+  /* ============================================================================
+     إدارة الصلاحيات وفترة التجربة المجانية (يومين)
+     ============================================================================ */
   function loadLocalData() {
     try {
       const savedPerm = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
@@ -102,7 +225,6 @@
             const localStart = Number(userTrialsMap[doc.id] || 0);
             userTrialsMap[doc.id] = localStart ? Math.min(localStart, started) : started;
 
-            // تحديث تاريخ الانتهاء في السحابة ليعكس قاعدة اليومين (48 ساعة) بدلاً من 3 أيام
             const expectedExpiry = userTrialsMap[doc.id] + TWO_DAYS_MS;
             if (!d.expiresAt || Number(d.expiresAt) > expectedExpiry) {
               db.collection("users").doc(uid).collection("tool_trials").doc(doc.id).set(
@@ -137,7 +259,6 @@
       }
     }
 
-    // الحساب يتم دائماً على 48 ساعة فقط من لحظة البداية (يخصم يوماً من أصحاب الـ 3 أيام تلقائياً)
     const remainingMs = (startedAt + TWO_DAYS_MS) - now;
     if (remainingMs <= 0) {
       return { active: false, remainingText: "" };
@@ -319,6 +440,8 @@
   }
 
   function enforceToolPermissions(forceRefresh = false) {
+    injectRewatchTutorialButton();
+
     managedTools.forEach(tool => {
       const reqTier = permissionsMap[tool.id] || tool.defaultTier;
       const targets = document.querySelectorAll(tool.selector);
@@ -426,42 +549,46 @@
     if (!user) {
       userTier = "free";
       enforceToolPermissions(true);
+      setTimeout(() => openToolTutorialModal(false), 600);
       return;
     }
 
     await syncTrialsFromCloud(user.uid);
 
-    if (user.email && user.email.toLowerCase() === ADMIN_EMAIL) {
-      userTier = "admin";
-      enforceToolPermissions(true);
-      return;
-    }
-
     const db = getDb();
-    if (!db) {
-      userTier = "free";
-      enforceToolPermissions(true);
-      return;
-    }
+    if (db) {
+      try {
+        const snap = await db.collection("users").doc(user.uid).get();
+        const data = snap.exists ? snap.data() : {};
 
-    try {
-      const snap = await db.collection("users").doc(user.uid).get();
-      const data = snap.exists ? snap.data() : {};
-      const plan = String(data.plan || data.tier || data.subscription || "").toLowerCase();
-      const proUntil = Number(data.pro_until || data.proUntil || 0);
-      const now = Date.now();
+        if (data.excelTutorialSeenV1 === true) {
+          localStorage.setItem(getTutorialStorageKey(), "1");
+        }
 
-      if ((plan.includes("pro") || data.isPro === true) && (!proUntil || proUntil > now)) {
-        userTier = "pro";
-      } else if (plan.includes("plus") && (!proUntil || proUntil > now)) {
-        userTier = "plus";
-      } else {
-        userTier = "free";
+        if (user.email && user.email.toLowerCase() === ADMIN_EMAIL) {
+          userTier = "admin";
+        } else {
+          const plan = String(data.plan || data.tier || data.subscription || "").toLowerCase();
+          const proUntil = Number(data.pro_until || data.proUntil || 0);
+          const now = Date.now();
+
+          if ((plan.includes("pro") || data.isPro === true) && (!proUntil || proUntil > now)) {
+            userTier = "pro";
+          } else if (plan.includes("plus") && (!proUntil || proUntil > now)) {
+            userTier = "plus";
+          } else {
+            userTier = "free";
+          }
+        }
+      } catch (_) {
+        userTier = user.email && user.email.toLowerCase() === ADMIN_EMAIL ? "admin" : "free";
       }
-    } catch (_) {
-      userTier = "free";
+    } else {
+      userTier = user.email && user.email.toLowerCase() === ADMIN_EMAIL ? "admin" : "free";
     }
+
     enforceToolPermissions(true);
+    setTimeout(() => openToolTutorialModal(false), 650);
   }
 
   function bindEvents() {
@@ -481,7 +608,12 @@
         debounceTimer = setTimeout(() => {
           renderAdminCustomToolsPanel(false);
           enforceToolPermissions(false);
-        }, 250);
+          // فتح فيديو الشرح تلقائياً عند الانتقال لقسم المساحة إذا لم يشاهده المستخدم بعد
+          const survSec = document.getElementById("s-surv") || document.getElementById("s-surveying");
+          if (survSec && survSec.offsetParent !== null) {
+            openToolTutorialModal(false);
+          }
+        }, 300);
       }
     });
   }
@@ -492,7 +624,8 @@
     setTimeout(() => {
       renderAdminCustomToolsPanel(false);
       enforceToolPermissions(true);
-    }, 450);
+      openToolTutorialModal(false);
+    }, 550);
 
     const checkFb = setInterval(() => {
       if (window.firebase && firebase.apps && firebase.apps.length) {
