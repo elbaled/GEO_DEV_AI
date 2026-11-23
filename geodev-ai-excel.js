@@ -1,13 +1,14 @@
 /* ============================================================================
-   GeoDev Survey & GIS Excel Workstation (V4.0 - Guest Preview + Auth Gate)
-   - متاحة للتجربة للزوار قبل تسجيل الدخول (رفع الملفات + معاينة لوحة CAD التفاعلية)
-   - عند محاولة التصدير/الحفظ أو تنفيذ أوامر AI بدون حساب: تظهر نافذة إنشاء حساب / تسجيل دخول
-   - بعد تسجيل الدخول: تعمل بكامل الصلاحيات داخل قسم "المساحة"
+   GeoDev AI Survey & GIS Excel Workstation (V5.0 ULTRA PRO)
+   - محرك ذكاء اصطناعي للتعرف التلقائي على أكواد المساحة (MNH, الصرف الصحي, أعمدة الإنارة, الشمال والجنوب, EG, RD)
+   - رسم رموز هندسية حقيقية في الكاد وتصدير DXF مقسم إلى طبقات ملونة تلقائياً
+   - التوصيل الذكي للخطوط حسب الكود + فحص أخطاء الرفع المساحي QA/QC
+   - معاينة مجانية للزوار قبل تسجيل الدخول + حماية الحفظ والتصدير والـ AI
    ============================================================================ */
 (function () {
   "use strict";
-  if (window.GeoDevAIExcelV4Init) return;
-  window.GeoDevAIExcelV4Init = true;
+  if (window.GeoDevAIExcelV5Init) return;
+  window.GeoDevAIExcelV5Init = true;
 
   function ensureSheetJS(callback) {
     if (window.XLSX) {
@@ -22,18 +23,20 @@
 
   let columns = ["P", "E", "N", "Z", "Code"];
   let rows = [
-    { P: "1", E: 312450.120, N: 3110210.450, Z: 24.510, Code: "BM1" },
-    { P: "2", E: 312475.840, N: 3110225.180, Z: 24.680, Code: "RD" },
-    { P: "3", E: 312510.300, N: 3110205.900, Z: 24.820, Code: "RD" },
-    { P: "4", E: 312495.600, N: 3110175.400, Z: 24.390, Code: "MANHOLE" },
-    { P: "5", E: 312455.200, N: 3110180.100, Z: 24.450, Code: "CORNER" }
+    { P: "1", E: 312450.120, N: 3110210.450, Z: 24.510, Code: "BM" },
+    { P: "2", E: 312475.840, N: 3110225.180, Z: 24.680, Code: "MNH" },
+    { P: "3", E: 312510.300, N: 3110205.900, Z: 24.820, Code: "MNH" },
+    { P: "4", E: 312495.600, N: 3110175.400, Z: 24.390, Code: "LP" },
+    { P: "5", E: 312455.200, N: 3110180.100, Z: 24.450, Code: "EG" },
+    { P: "6", E: 312465.000, N: 3110235.000, Z: 24.700, Code: "NORTH" }
   ];
 
   let historyStack = [];
   let activeSubTab = "grid";
+  let activeCodeFilter = "ALL"; // ALL | SEWER | LIGHT | DIR | NGL | ROAD
   let crsMode = "UTM36N";
   let showLabelsOnCanvas = true;
-  let connectLinesOnCanvas = true;
+  let connectMode = "BY_CODE"; // "BY_CODE" | "SEQUENTIAL" | "NONE"
   let searchFilter = "";
   let isLoggedInUser = false;
 
@@ -54,6 +57,75 @@
       }
     } catch (_) {}
     return isLoggedInUser;
+  }
+
+  /* ============================================================================
+     محرك التصنيف الهندسي الذكي للأكواد المساحية (MNH, الصرف, الإنارة, الشمال/الجنوب)
+     ============================================================================ */
+  function classifySurveyCode(rawCode, extraText = "") {
+    const combined = `${String(rawCode || "")} ${String(extraText || "")}`.trim().toUpperCase();
+
+    if (!combined || combined === "----" || combined === "-") {
+      return { group: "OTHER", labelAr: "بدون كود", layer: "GD_GENERAL", color: "#94a3b8", dxfColor: 7, symbol: "DOT" };
+    }
+
+    // 1. مطابق وغرف الصرف الصحي (MNH / SAN / SEW / MH / IC / CB / GR)
+    if (/\b(MNH|MH|SAN|SEW|SEWER|IC|CB|GR|GULLY|PIT|MANHOLE|PIPE)\b/.test(combined) || /مطبق|صرف|غرفة|بالوعة/.test(combined)) {
+      return { group: "SEWER", labelAr: "مطبق / صرف صحي (MNH)", layer: "GD_SEWER_MNH", color: "#fb923c", dxfColor: 30, symbol: "MANHOLE" };
+    }
+
+    // 2. أعمدة الإنارة والكهرباء (LP / POLE / LIGHT / EL)
+    if (/\b(LP|LIGHT|POLE|LAMP|EL|ELEC|TR|CAB|STREETLIGHT)\b/.test(combined) || /انارة|إنارة|عمود|كهرباء/.test(combined)) {
+      return { group: "LIGHT", labelAr: "عمود إنارة / كهرباء", layer: "GD_LIGHT_POLES", color: "#facc15", dxfColor: 2, symbol: "LIGHT" };
+    }
+
+    // 3. أكواد الشمال والجنوب والاتجاهات (N / S / NORTH / SOUTH / NE / NW / SE / SW)
+    if (/^(N|S|NORTH|SOUTH|NE|NW|SE|SW|N-E|N-W|S-E|S-W)$/.test(combined.split(/\s+/)[0]) || /شمال|جنوب/.test(combined)) {
+      const isSouth = /^(S|SOUTH|SE|SW|S-E|S-W)/.test(combined) || /جنوب/.test(combined);
+      return {
+        group: "DIR",
+        labelAr: isSouth ? "اتجاه / حد جنوب (South)" : "اتجاه / حد شمال (North)",
+        layer: isSouth ? "GD_DIR_SOUTH" : "GD_DIR_NORTH",
+        color: isSouth ? "#f43f5e" : "#38bdf8",
+        dxfColor: isSouth ? 1 : 4,
+        symbol: "DIR"
+      };
+    }
+
+    // 4. الطرق والأرصفة والأسفلت (RD / CL / EP / CURB / ASPH)
+    if (/\b(RD|ROAD|CL|EP|EDGE|CURB|KERB|SW|ASPH|PAV)\b/.test(combined) || /طريق|رصيف|اسفلت|أسفلت/.test(combined)) {
+      return { group: "ROAD", labelAr: "طريق / رصيف (Road)", layer: "GD_ROADS", color: "#60a5fa", dxfColor: 5, symbol: "DOT" };
+    }
+
+    // 5. الأرض الطبيعية والروبيرات (EG / NGL / BM / TBM / SPOT)
+    if (/\b(EG|NGL|GROUND|SPOT|BM|TBM|CP|GPS)\b/.test(combined) || /روبير|ارض|أرض|طبيعية/.test(combined)) {
+      const isBm = /\b(BM|TBM|CP)\b/.test(combined) || /روبير/.test(combined);
+      return {
+        group: "NGL",
+        labelAr: isBm ? "نقطة روبير / ثوابت (BM)" : "أرض طبيعية (EG / NGL)",
+        layer: isBm ? "GD_BENCHMARKS" : "GD_NGL_EG",
+        color: "#4ade80",
+        dxfColor: 3,
+        symbol: isBm ? "TRIANGLE" : "DOT"
+      };
+    }
+
+    // 6. مباني وأسوار (BLD / COR / WALL / FN)
+    if (/\b(BLD|BUILD|COR|CORNER|WALL|FN|FENCE|GATE)\b/.test(combined) || /مبنى|سور|ركن/.test(combined)) {
+      return { group: "BLD", labelAr: "مبنى / سور", layer: "GD_BUILDINGS", color: "#c084fc", dxfColor: 6, symbol: "SQUARE" };
+    }
+
+    return { group: "OTHER", labelAr: `كود عام (${rawCode})`, layer: `GD_${String(rawCode).replace(/[^a-zA-Z0-9_]/g, "_")}`, color: "#fbbf24", dxfColor: 7, symbol: "DOT" };
+  }
+
+  function getRowClassification(rowObj) {
+    const { cKey } = getCoordKeys();
+    const codeVal = cKey ? rowObj[cKey] : "";
+    const extraVals = Object.entries(rowObj)
+      .filter(([k]) => !/^(p|e|n|z|east|north|level|id|no)$/i.test(k.trim()))
+      .map(([, v]) => v)
+      .join(" ");
+    return classifySurveyCode(codeVal, extraVals);
   }
 
   function resetCadView() {
@@ -97,9 +169,6 @@
     box.textContent = msg;
   }
 
-  /* ============================================================================
-     نافذة تنبيه تسجيل الدخول / إنشاء حساب عند محاولة الحفظ أو استخدام AI للزوار
-     ============================================================================ */
   function openAuthRequiredModal(actionLabel = "حفظ وتصدير الملفات واستخدام أوامر الذكاء الاصطناعي") {
     const oldModal = document.getElementById("gdExcelAuthGateModal");
     if (oldModal) oldModal.remove();
@@ -138,22 +207,17 @@
     `;
 
     document.body.appendChild(overlay);
-
     const closeModal = () => overlay.remove();
     document.getElementById("gdStayGuestPreviewBtn").onclick = closeModal;
-    overlay.addEventListener("click", e => {
-      if (e.target === overlay) closeModal();
-    });
+    overlay.addEventListener("click", e => { if (e.target === overlay) closeModal(); });
 
     document.getElementById("gdGoToLoginFromExcelBtn").onclick = () => {
       closeModal();
-      // التمرير إلى نموذج تسجيل الدخول في الصفحة أو فتح نافذة الدخول
       const authContainer =
         document.getElementById("authScreen") ||
         document.getElementById("loginScreen") ||
         document.getElementById("authBox") ||
         document.querySelector(".auth-card, .login-card, #s-account, form");
-
       if (authContainer) {
         authContainer.scrollIntoView({ behavior: "smooth", block: "center" });
         const emailInput = authContainer.querySelector('input[type="email"], input[type="text"]');
@@ -188,15 +252,8 @@
         gap: 10px;
         box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
       }
-      #gdGuestWelcomeBanner strong {
-        color: #fbbf24;
-        font-size: 14px;
-        display: block;
-      }
-      #gdGuestWelcomeBanner span {
-        font-size: 12px;
-        color: #d6d3d1;
-      }
+      #gdGuestWelcomeBanner strong { color: #fbbf24; font-size: 14px; display: block; }
+      #gdGuestWelcomeBanner span { font-size: 12px; color: #d6d3d1; }
 
       #gdAiExcelStudio {
         direction: rtl;
@@ -220,17 +277,8 @@
         border-bottom: 1px solid #38332e;
         margin-bottom: 14px;
       }
-      .gd-ex-top-bar h3 {
-        margin: 0;
-        font-size: 18px;
-        font-weight: 900;
-        color: #fbbf24;
-      }
-      .gd-ex-top-bar p {
-        margin: 4px 0 0;
-        font-size: 12px;
-        color: #a8a29e;
-      }
+      .gd-ex-top-bar h3 { margin: 0; font-size: 18px; font-weight: 900; color: #fbbf24; }
+      .gd-ex-top-bar p { margin: 4px 0 0; font-size: 12px; color: #a8a29e; }
       .gd-ex-pro-pill {
         background: linear-gradient(135deg, #e09f24, #b45309);
         color: #141210;
@@ -238,7 +286,6 @@
         font-size: 11px;
         padding: 5px 12px;
         border-radius: 999px;
-        letter-spacing: 0.5px;
       }
 
       /* شريط الذكاء الاصطناعي */
@@ -249,14 +296,10 @@
         padding: 13px;
         margin-bottom: 14px;
       }
-      .gd-ex-ai-row {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-      }
+      .gd-ex-ai-row { display: flex; gap: 8px; flex-wrap: wrap; }
       .gd-ex-input {
         flex: 1;
-        min-width: 210px;
+        min-width: 200px;
         padding: 10px 12px;
         border-radius: 10px;
         border: 1.5px solid #3f3a36;
@@ -266,10 +309,7 @@
         font-weight: 700;
         font-family: inherit;
       }
-      .gd-ex-input:focus {
-        outline: none;
-        border-color: #fbbf24;
-      }
+      .gd-ex-input:focus { outline: none; border-color: #fbbf24; }
       .gd-ex-ai-btn {
         padding: 10px 16px;
         border-radius: 10px;
@@ -281,12 +321,7 @@
         cursor: pointer;
         font-family: inherit;
       }
-      .gd-ex-chips {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-        margin-top: 8px;
-      }
+      .gd-ex-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
       .gd-ex-chip {
         background: #26221f;
         border: 1px solid #44403c;
@@ -298,10 +333,7 @@
         cursor: pointer;
         font-family: inherit;
       }
-      .gd-ex-chip:hover {
-        border-color: #fbbf24;
-        color: #fbbf24;
-      }
+      .gd-ex-chip:hover { border-color: #fbbf24; color: #fbbf24; }
       #gdExcelAiLog {
         margin-top: 9px;
         padding: 8px 12px;
@@ -314,7 +346,34 @@
         line-height: 1.6;
       }
 
-      /* تبويبات بيئة العمل */
+      /* شريط فلترة الأكواد الذكي */
+      .gd-ex-code-filters {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-bottom: 12px;
+        padding: 9px;
+        background: #100e0c;
+        border: 1px solid #2e2a26;
+        border-radius: 12px;
+      }
+      .gd-ex-filter-pill {
+        padding: 6px 11px;
+        border-radius: 9px;
+        border: 1px solid #3f3a36;
+        background: #1c1917;
+        color: #d6d3d1;
+        font-size: 11.5px;
+        font-weight: 800;
+        cursor: pointer;
+        font-family: inherit;
+      }
+      .gd-ex-filter-pill.active {
+        background: rgba(224, 159, 36, 0.2);
+        border-color: #e09f24;
+        color: #fbbf24;
+      }
+
       .gd-ex-mode-tabs {
         display: grid;
         grid-template-columns: repeat(3, 1fr);
@@ -339,7 +398,6 @@
         color: #fbbf24;
       }
 
-      /* شريط الاستيراد والأدوات */
       .gd-ex-toolbar {
         display: flex;
         flex-wrap: wrap;
@@ -361,10 +419,7 @@
         align-items: center;
         gap: 5px;
       }
-      .gd-ex-btn:hover {
-        border-color: #e09f24;
-        color: #fbbf24;
-      }
+      .gd-ex-btn:hover { border-color: #e09f24; color: #fbbf24; }
       .gd-ex-btn.gold {
         background: linear-gradient(135deg, #e09f24, #b45309);
         color: #141210;
@@ -377,10 +432,9 @@
         color: #fca5a5;
       }
 
-      /* بطاقات الإحصائيات الهندسية */
       .gd-ex-stats {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(115px, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
         gap: 7px;
         margin-bottom: 12px;
       }
@@ -391,18 +445,9 @@
         padding: 8px;
         text-align: center;
       }
-      .gd-ex-stat span {
-        display: block;
-        font-size: 10px;
-        color: #a8a29e;
-      }
-      .gd-ex-stat strong {
-        font-size: 13px;
-        color: #fbbf24;
-        font-weight: 900;
-      }
+      .gd-ex-stat span { display: block; font-size: 10px; color: #a8a29e; }
+      .gd-ex-stat strong { font-size: 13px; color: #fbbf24; font-weight: 900; }
 
-      /* الجدول التفاعلي */
       .gd-ex-grid-wrap {
         max-height: 300px;
         overflow: auto;
@@ -411,12 +456,7 @@
         background: #0e0d0b;
         margin-bottom: 14px;
       }
-      .gd-ex-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 12.5px;
-        text-align: center;
-      }
+      .gd-ex-table { width: 100%; border-collapse: collapse; font-size: 12.5px; text-align: center; }
       .gd-ex-table th {
         position: sticky;
         top: 0;
@@ -428,14 +468,8 @@
         font-weight: 900;
         white-space: nowrap;
       }
-      .gd-ex-table td {
-        border: 1px solid #26221f;
-        padding: 0;
-        background: #141210;
-      }
-      .gd-ex-table tr:nth-child(even) td {
-        background: #191614;
-      }
+      .gd-ex-table td { border: 1px solid #26221f; padding: 0; background: #141210; }
+      .gd-ex-table tr:nth-child(even) td { background: #191614; }
       .gd-ex-cell {
         width: 100%;
         min-width: 76px;
@@ -449,10 +483,7 @@
         font-weight: 700;
         font-family: inherit;
       }
-      .gd-ex-cell:focus {
-        outline: none;
-        background: rgba(224, 159, 36, 0.16);
-      }
+      .gd-ex-cell:focus { outline: none; background: rgba(224, 159, 36, 0.16); }
 
       .gd-ex-subpanel {
         background: #12100e;
@@ -476,7 +507,6 @@
         direction: ltr;
       }
 
-      /* شاشة المعاينة CAD التفاعلية */
       .gd-ex-canvas-box {
         background: #06080d;
         border: 1.5px solid #38bdf8;
@@ -498,21 +528,14 @@
       .gd-ex-canvas-wrapper {
         position: relative;
         width: 100%;
-        height: 310px;
+        height: 320px;
         border-radius: 10px;
         overflow: hidden;
         touch-action: none;
         cursor: grab;
       }
-      .gd-ex-canvas-wrapper:active {
-        cursor: grabbing;
-      }
-      #gdExcelCadCanvas {
-        width: 100%;
-        height: 100%;
-        display: block;
-        background: #04060a;
-      }
+      .gd-ex-canvas-wrapper:active { cursor: grabbing; }
+      #gdExcelCadCanvas { width: 100%; height: 100%; display: block; background: #04060a; }
       .gd-cad-zoom-controls {
         position: absolute;
         bottom: 10px;
@@ -532,11 +555,8 @@
         cursor: pointer;
         font-family: inherit;
       }
-      .gd-cad-zbtn:hover {
-        background: #0284c7;
-      }
+      .gd-cad-zbtn:hover { background: #0284c7; }
 
-      /* شبكة التصدير للبرامج الهندسية */
       .gd-ex-export-section-title {
         font-size: 13px;
         font-weight: 900;
@@ -564,16 +584,8 @@
         text-align: center;
         transition: all 0.2s ease;
       }
-      .gd-ex-exp-btn:hover {
-        border-color: #fbbf24;
-        transform: translateY(-1px);
-      }
-      .gd-ex-exp-btn small {
-        display: block;
-        font-size: 10px;
-        color: #a8a29e;
-        margin-top: 2px;
-      }
+      .gd-ex-exp-btn:hover { border-color: #fbbf24; transform: translateY(-1px); }
+      .gd-ex-exp-btn small { display: block; font-size: 10px; color: #a8a29e; margin-top: 2px; }
     `;
     document.head.appendChild(style);
   }
@@ -585,45 +597,48 @@
       <div class="gd-ex-top-bar">
         <div>
           <h3>📊 محطة إكسيل المساحة ونظم المعلومات الجغرافية (AI Survey Excel)</h3>
-          <p>ارفع ملف الإكسيل أو لوحة الأوتوكاد (DXF) أو التوتال ستيشن وعاين الرسمة فوراً — وسجّل الدخول لحفظ وتصدير الملفات</p>
+          <p>تحليل ذكي لأكواد MNH والصرف الصحي وأعمدة الإنارة والشمال والجنوب + تصدير DXF بطبقات ملونة</p>
         </div>
-        <span class="gd-ex-pro-pill">${logged ? "WORKSTATION PRO" : "معاينة مجانية للزوار"}</span>
+        <span class="gd-ex-pro-pill">${logged ? "WORKSTATION PRO V5" : "معاينة مجانية للزوار"}</span>
       </div>
 
       <!-- شريط أوامر الذكاء الاصطناعي -->
       <div class="gd-ex-ai-panel">
         <div class="gd-ex-ai-row">
           <input type="text" id="gdExcelAiPrompt" class="gd-ex-input"
-            placeholder="اكتب أمرك بالعربي: اجمع 0.50 على Z | احسب المساحة | احسب المسافة والانحراف | احفظ الملف...">
+            placeholder="اكتب أمرك: صنف الأكواد تلقائياً | افحص أخطاء الرفع | احسب المساحة | اجمع 0.50 على Z...">
           <button type="button" id="gdExcelAiExecBtn" class="gd-ex-ai-btn">⚡ تنفيذ بالـ AI</button>
         </div>
         <div class="gd-ex-chips">
+          <button type="button" class="gd-ex-chip" data-ai-cmd="صنف الأكواد المساحية تلقائياً">🏷️ تصنيف الأكواد (MNH / إنارة / شمال وجنوب)</button>
+          <button type="button" class="gd-ex-chip" data-ai-cmd="افحص أخطاء الرفع المساحي">🩺 فحص أخطاء الرفع (QA/QC)</button>
           <button type="button" class="gd-ex-chip" data-ai-cmd="احسب المسافة والانحراف">📐 المسافة والانحراف</button>
           <button type="button" class="gd-ex-chip" data-ai-cmd="احسب المساحة والمحيط">🗺️ المساحة بالفدان والمتر</button>
           <button type="button" class="gd-ex-chip" data-ai-cmd="اجمع 0.50 على Z">➕ إزاحة Z (+0.50)</button>
           <button type="button" class="gd-ex-chip" data-ai-cmd="بدل الشرق والشمال">🔄 تبديل E ⇄ N</button>
-          <button type="button" class="gd-ex-chip" data-ai-cmd="احذف النقاط المكررة">🧹 حذف المكرر</button>
-          <button type="button" class="gd-ex-chip" data-ai-cmd="اعيد ترقيم النقاط 1 2 3">🔢 إعادة ترقيم P</button>
         </div>
         <div id="gdExcelAiLog">
           ${logged
-            ? "جاهز لاستيراد ملفات (XLSX, DXF, SDR, CDR, GSI, CSV) أو تصديرها مباشرة للأوتوكاد و Excel و ArcGIS Pro."
-            : "وضع الزائر مفعّل: يمكنك رفع ملفات (Excel / DXF / CSV / SDR) ومعاينة الرسمة في لوحة الأوتوكاد مجاناً. سجّل الدخول للحفظ واستخدام AI."}
+            ? "جاهز لاستيراد ملفات (XLSX, DXF, SDR, CDR, GSI, CSV) وتصنيف أكواد MNH والإنارة والشمال/الجنوب وتصديرها لطبقات AutoCAD."
+            : "وضع الزائر مفعّل: يمكنك رفع ملفات (Excel / DXF / CSV / SDR) ومعاينة الرموز الهندسية في لوحة الكاد مجاناً."}
         </div>
       </div>
 
-      <!-- شريط الاستيراد الموحد -->
+      <!-- شريط الاستيراد والأدوات -->
       <div class="gd-ex-toolbar">
         <label class="gd-ex-btn gold" style="cursor:pointer;">
-          📂 رفع ملف من الجهاز (Excel / DXF / CSV / SDR / GSI)
+          📂 رفع ملف (Excel / DXF / CSV / SDR / GSI)
           <input type="file" id="gdExcelFileInput" accept=".xlsx,.xls,.csv,.txt,.dxf,.sdr,.cdr,.gsi" style="display:none;">
         </label>
-        <button type="button" class="gd-ex-btn" id="gdExAddRowBtn">➕ نقطة جديدة</button>
-        <button type="button" class="gd-ex-btn" id="gdExAddColBtn">📑 عمود جديد</button>
+        <button type="button" class="gd-ex-btn" id="gdExAutoClassifyBtn">🏷️ تصنيف الأكواد بالـ AI</button>
+        <button type="button" class="gd-ex-btn" id="gdExAddRowBtn">➕ نقطة</button>
         <button type="button" class="gd-ex-btn" id="gdExSwapENBtn">🔄 E ⇄ N</button>
         <button type="button" class="gd-ex-btn" id="gdExUndoBtn">↩️ تراجع</button>
         <button type="button" class="gd-ex-btn danger" id="gdExClearBtn">🗑️ تفريغ</button>
       </div>
+
+      <!-- شريط الفلترة الذكية حسب نوع الكود -->
+      <div class="gd-ex-code-filters" id="gdExCodeFilterBar"></div>
 
       <!-- تبويبات بيئة العمل -->
       <div class="gd-ex-mode-tabs">
@@ -632,19 +647,14 @@
         <button type="button" class="gd-ex-mode-tab" data-ex-subtab="calc_tools">🧮 إزاحة وحفر وردم (Cut/Fill)</button>
       </div>
 
-      <!-- لوحة لصق إحداثيات من الأوتوكاد -->
       <div id="gdExSubpanelCadImport" class="gd-ex-subpanel" style="display:none;">
         <strong style="color:#fbbf24;font-size:13px;">استخراج الإحداثيات من الأوتوكاد عبر أمر LIST:</strong>
-        <p style="margin:4px 0;font-size:11.5px;color:#a8a29e;">
-          في الأوتوكاد حدد النقاط أو البولي لاين واكتب أمر <code>LIST</code> ثم انسخ النص والصقه هنا لاستخراج <code>X, Y, Z</code> تلقائياً:
-        </p>
-        <textarea id="gdAcadListPasteArea" class="gd-ex-textarea" placeholder="at point  X= 312450.120  Y= 3110210.450  Z= 24.510&#10;at point  X= 312475.840  Y= 3110225.180  Z= 24.680"></textarea>
+        <textarea id="gdAcadListPasteArea" class="gd-ex-textarea" placeholder="at point  X= 312450.120  Y= 3110210.450  Z= 24.510"></textarea>
         <button type="button" class="gd-ex-btn gold" id="gdParseAcadListBtn" style="width:100%;justify-content:center;">
           ⚡ استخراج الإحداثيات ومعاينتها في لوحة الكاد
         </button>
       </div>
 
-      <!-- لوحة الأدوات الهندسية -->
       <div id="gdExSubpanelCalcTools" class="gd-ex-subpanel" style="display:none;">
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">
           <div style="background:#1c1917;padding:10px;border-radius:10px;border:1px solid #38332e;">
@@ -675,27 +685,27 @@
         <table class="gd-ex-table" id="gdExcelDataTable"></table>
       </div>
 
-      <!-- شاشة المعاينة الهندسية التفاعلية (Zoom & Pan) -->
+      <!-- شاشة المعاينة الهندسية التفاعلية -->
       <div class="gd-ex-canvas-box">
         <div class="gd-ex-canvas-head">
-          <span>🖥️ شاشة المعاينة الهندسية الحية (اسحب للتحريك • قرّب وبعّد بأصابعك أو بالأزرار)</span>
+          <span>🖥️ معاينة CAD بالرموز الهندسية (🟠 مطابق MNH • 🟡 إنارة • 🔺 روبير • 🔵 شمال / 🔴 جنوب)</span>
           <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
-            <input type="text" id="gdExSearchInput" class="gd-ex-input" style="max-width:120px;padding:4px 8px;font-size:11px;" placeholder="🔍 بحث...">
+            <input type="text" id="gdExSearchInput" class="gd-ex-input" style="max-width:110px;padding:4px 8px;font-size:11px;" placeholder="🔍 بحث...">
             <button type="button" class="gd-ex-btn" style="padding:4px 8px;font-size:11px;" id="gdToggleLabelsBtn">🏷️ النصوص</button>
-            <button type="button" class="gd-ex-btn" style="padding:4px 8px;font-size:11px;" id="gdToggleLinesBtn">📏 الخطوط</button>
+            <button type="button" class="gd-ex-btn" style="padding:4px 8px;font-size:11px;" id="gdCycleConnectBtn">📏 توصيل: حسب الكود</button>
             <select id="gdCrsSelect" class="gd-ex-btn" style="padding:4px 8px;font-size:11px;">
-              <option value="UTM36N" selected>UTM Zone 36N (مصر)</option>
-              <option value="UTM35N">UTM Zone 35N (غرب مصر)</option>
-              <option value="WGS84">WGS84 (Lat / Lon)</option>
+              <option value="UTM36N" selected>UTM Zone 36N</option>
+              <option value="UTM35N">UTM Zone 35N</option>
+              <option value="WGS84">WGS84 (Lat/Lon)</option>
             </select>
           </div>
         </div>
         <div class="gd-ex-canvas-wrapper" id="gdCadCanvasWrapper">
           <canvas id="gdExcelCadCanvas"></canvas>
           <div class="gd-cad-zoom-controls">
-            <button type="button" class="gd-cad-zbtn" id="gdCadZoomInBtn" title="تقريب">➕ تقريب</button>
-            <button type="button" class="gd-cad-zbtn" id="gdCadZoomOutBtn" title="تبعيد">➖ تبعيد</button>
-            <button type="button" class="gd-cad-zbtn" id="gdCadZoomResetBtn" title="عرض الكل">🎯 توسيط الكل</button>
+            <button type="button" class="gd-cad-zbtn" id="gdCadZoomInBtn">➕ تقريب</button>
+            <button type="button" class="gd-cad-zbtn" id="gdCadZoomOutBtn">➖ تبعيد</button>
+            <button type="button" class="gd-cad-zbtn" id="gdCadZoomResetBtn">🎯 توسيط الكل</button>
           </div>
         </div>
       </div>
@@ -704,25 +714,25 @@
       <div class="gd-ex-export-section-title">📗 حفظ وتصدير ملفات Excel نظيفة (تبدأ من النقطة رقم 1 مباشرة):</div>
       <div class="gd-ex-export-grid">
         <button type="button" class="gd-ex-exp-btn" data-export-fmt="xlsx_penzd" style="border-color:#22c55e;">
-          📗 حفظ Excel (P, E, N, Z, Code)
+          📗 Excel نظيف (P, E, N, Z, Code)
           <small>${logged ? "جاهز للتحميل المباشر" : "🔒 يتطلب تسجيل الدخول"}</small>
         </button>
         <button type="button" class="gd-ex-exp-btn" data-export-fmt="xlsx_pnz" style="border-color:#10b981;">
-          📗 حفظ Excel (P, N, Z)
+          📗 Excel نظيف (P, N, Z)
           <small>${logged ? "جاهز للتحميل المباشر" : "🔒 يتطلب تسجيل الدخول"}</small>
         </button>
         <button type="button" class="gd-ex-exp-btn" data-export-fmt="xlsx_pnez" style="border-color:#14b8a6;">
-          📗 حفظ Excel (P, N, E, Z)
+          📗 Excel نظيف (P, N, E, Z)
           <small>${logged ? "جاهز للتحميل المباشر" : "🔒 يتطلب تسجيل الدخول"}</small>
         </button>
       </div>
 
       <!-- قسم التصدير لبرامج CAD & Surfer -->
-      <div class="gd-ex-export-section-title">📐 تصدير مباشر لبرامج الأوتوكاد والسيرفر (CAD &amp; Surfer):</div>
+      <div class="gd-ex-export-section-title">📐 تصدير ذكي لبرامج الأوتوكاد والسيرفر (طبقات ورموز تلقائية):</div>
       <div class="gd-ex-export-grid">
         <button type="button" class="gd-ex-exp-btn" data-export-fmt="dxf" style="border-color:#ef4444;">
-          📕 لوحة AutoCAD (.dxf)
-          <small>${logged ? "تفتح مباشرة في AutoCAD" : "🔒 يتطلب تسجيل الدخول"}</small>
+          📕 لوحة AutoCAD (.dxf) بطبقات ذكية
+          <small>${logged ? "يفصل MNH والإنارة والشمال/الجنوب في طبقات" : "🔒 يتطلب تسجيل الدخول"}</small>
         </button>
         <button type="button" class="gd-ex-exp-btn" data-export-fmt="csv" style="border-color:#38bdf8;">
           📘 Civil 3D (.csv)
@@ -743,7 +753,7 @@
       <div class="gd-ex-export-grid">
         <button type="button" class="gd-ex-exp-btn" data-export-fmt="geojson" style="border-color:#10b981;">
           🗺️ ArcGIS Pro / QGIS (.geojson)
-          <small>${logged ? "طبقة جغرافية 3D" : "🔒 يتطلب تسجيل الدخول"}</small>
+          <small>${logged ? "طبقة جغرافية بالتصنيف الهندسي" : "🔒 يتطلب تسجيل الدخول"}</small>
         </button>
         <button type="button" class="gd-ex-exp-btn" data-export-fmt="wkt" style="border-color:#06b6d4;">
           📊 ArcGIS Pro WKT (.csv)
@@ -776,16 +786,25 @@
 
   function computeSurveyStats() {
     const { eKey, nKey, zKey } = getCoordKeys();
-    const validPts = rows
-      .map(r => ({
-        e: parseFloat(r[eKey]),
-        n: parseFloat(r[nKey]),
-        z: parseFloat(r[zKey])
-      }))
-      .filter(p => !isNaN(p.e) && !isNaN(p.n));
+    let sewerCount = 0, lightCount = 0, dirCount = 0, nglCount = 0, roadCount = 0;
+
+    const validPts = [];
+    rows.forEach(r => {
+      const cls = getRowClassification(r);
+      if (cls.group === "SEWER") sewerCount++;
+      else if (cls.group === "LIGHT") lightCount++;
+      else if (cls.group === "DIR") dirCount++;
+      else if (cls.group === "NGL") nglCount++;
+      else if (cls.group === "ROAD") roadCount++;
+
+      const e = parseFloat(r[eKey]);
+      const n = parseFloat(r[nKey]);
+      const z = parseFloat(r[zKey]);
+      if (!isNaN(e) && !isNaN(n)) validPts.push({ e, n, z });
+    });
 
     if (!validPts.length) {
-      return { count: rows.length, minZ: "-", maxZ: "-", perimeter: 0, areaM2: 0 };
+      return { count: rows.length, minZ: "-", maxZ: "-", perimeter: 0, areaM2: 0, sewerCount, lightCount, dirCount, nglCount, roadCount };
     }
 
     const zVals = validPts.map(p => p.z).filter(v => !isNaN(v));
@@ -804,7 +823,18 @@
         area2 += validPts[i].e * validPts[j].n - validPts[j].e * validPts[i].n;
       }
     }
-    return { count: rows.length, minZ, maxZ, perimeter, areaM2: Math.abs(area2) / 2 };
+    return {
+      count: rows.length,
+      minZ,
+      maxZ,
+      perimeter,
+      areaM2: Math.abs(area2) / 2,
+      sewerCount,
+      lightCount,
+      dirCount,
+      nglCount,
+      roadCount
+    };
   }
 
   function projectToWGS84(easting, northing) {
@@ -851,7 +881,7 @@
   }
 
   /* ============================================================================
-     استيراد الملفات (متاح مجاناً للزوار والأعضاء لمعاينة الرسمة)
+     استيراد الملفات
      ============================================================================ */
   function parseDxfContent(dxfText) {
     const lines = dxfText.split(/\r?\n/).map(l => l.trim());
@@ -915,6 +945,7 @@
     if (!file) return;
     const ext = file.name.split(".").pop().toLowerCase();
     saveSnapshot();
+    activeCodeFilter = "ALL";
 
     if (ext === "xlsx" || ext === "xls") {
       ensureSheetJS(() => {
@@ -935,7 +966,7 @@
 
             if (dataRows.length) {
               const maxCols = Math.max(...dataRows.map(r => r.length));
-              const defaultHeaders = ["P", "E", "N", "Z", "Code"];
+              const defaultHeaders = ["P", "E", "N", "Z", "Code", "Type", "Pole_Name", "Pole_H"];
               columns = Array.from({ length: maxCols }, (_, i) => defaultHeaders[i] || `Col_${i + 1}`);
               rows = dataRows.map((r, idx) => {
                 const obj = {};
@@ -950,9 +981,13 @@
               rows = jsonRows;
             }
 
+            const st = computeSurveyStats();
             resetCadView();
             renderExcelTable();
-            showExcelLog(`📗 تم رفع ${rows.length} نقطة من (${file.name}) وعرض الرسمة في لوحة الكاد!`, "success");
+            showExcelLog(
+              `📗 تم رفع ${rows.length} نقطة وتصنيفها تلقائياً: (${st.sewerCount} مطبق/صرف MNH | ${st.lightCount} عمود إنارة | ${st.nglCount} أرض طبيعية | ${st.dirCount} شمال/جنوب).`,
+              "success"
+            );
           } catch (err) {
             showExcelLog("خطأ في قراءة Excel: " + err.message, "error");
           }
@@ -973,7 +1008,7 @@
         rows = pts;
         resetCadView();
         renderExcelTable();
-        showExcelLog(`📐 تم رفع ${rows.length} نقطة من لوحة AutoCAD DXF (${file.name}) وعرضها على الشاشة!`, "success");
+        showExcelLog(`📐 تم رفع ${rows.length} نقطة من لوحة AutoCAD DXF (${file.name})!`, "success");
         return;
       }
 
@@ -999,7 +1034,7 @@
           rows = parsed;
           resetCadView();
           renderExcelTable();
-          showExcelLog(`📡 تم رفع ${rows.length} نقطة من ملف التوتال ستيشن (${file.name}) وعرض الرسمة!`, "success");
+          showExcelLog(`📡 تم رفع ${rows.length} نقطة من ملف التوتال ستيشن (${file.name})!`, "success");
           return;
         }
       }
@@ -1026,7 +1061,7 @@
           rows = parsed;
           resetCadView();
           renderExcelTable();
-          showExcelLog(`📡 تم رفع ${rows.length} نقطة من ملف Leica GSI وعرضها!`, "success");
+          showExcelLog(`📡 تم رفع ${rows.length} نقطة من ملف Leica GSI!`, "success");
           return;
         }
       }
@@ -1048,13 +1083,13 @@
       });
       resetCadView();
       renderExcelTable();
-      showExcelLog(`✅ تم رفع ${rows.length} نقطة من ${file.name} وعرض الرسمة!`, "success");
+      showExcelLog(`✅ تم رفع ${rows.length} نقطة من ${file.name} وعرضها!`, "success");
     };
     reader.readAsText(file);
   }
 
   /* ============================================================================
-     التصدير والحفظ (محمي للزوار: يتطلب تسجيل الدخول أو إنشاء حساب)
+     التصدير الذكي (بما في ذلك DXF مقسم لطبقات ملونة حسب كود MNH والإنارة والشمال/الجنوب)
      ============================================================================ */
   function downloadBlob(content, filename, mime) {
     const blob = new Blob([content], { type: mime });
@@ -1097,12 +1132,11 @@
       window.XLSX.utils.book_append_sheet(wb, ws, "Points");
       const label = mode === "xlsx_pnz" ? "PNZ" : mode === "xlsx_pnez" ? "PNEZ" : "PENZD";
       window.XLSX.writeFile(wb, `GeoDev_${label}_Clean_${Date.now()}.xlsx`);
-      showExcelLog(`📗 تم حفظ وتصدير ملف Excel نظيف (${label}) يبدأ من النقطة 1 مباشرة!`, "success");
+      showExcelLog(`📗 تم تصدير ملف Excel نظيف (${label}) يبدأ من النقطة 1 مباشرة!`, "success");
     });
   }
 
   function exportData(format) {
-    // منع التصدير والحفظ للزوار غير المسجلين
     if (!checkAuthState()) {
       openAuthRequiredModal("حفظ وتصدير الملفات بصيغ Excel و AutoCAD و GIS");
       return;
@@ -1116,9 +1150,10 @@
       return;
     }
 
+    // تصدير DXF ذكي مقسم إلى طبقات ملونة ورموز للمطابق وأعمدة الإنارة
     if (format === "dxf") {
       const dxf = ["0", "SECTION", "2", "ENTITIES"];
-      const polyPts = [];
+      const groupedPolylines = {};
 
       rows.forEach(r => {
         const e = parseFloat(r[eKey]);
@@ -1128,36 +1163,52 @@
         const c = String(r[cKey] || "");
         if (isNaN(e) || isNaN(n)) return;
 
-        polyPts.push({ e, n, z });
-        dxf.push("0", "POINT", "8", "GD_POINTS", "10", e.toFixed(4), "20", n.toFixed(4), "30", z.toFixed(4));
-        dxf.push("0", "TEXT", "8", "GD_TEXT_ID", "10", (e + 0.35).toFixed(4), "20", (n + 0.35).toFixed(4), "30", z.toFixed(4), "40", "0.55", "1", `${p} ${c}`.trim());
-        dxf.push("0", "TEXT", "8", "GD_TEXT_ELEV", "10", (e + 0.35).toFixed(4), "20", (n - 0.35).toFixed(4), "30", z.toFixed(4), "40", "0.45", "1", z.toFixed(3));
+        const cls = getRowClassification(r);
+        if (!groupedPolylines[cls.layer]) groupedPolylines[cls.layer] = [];
+        groupedPolylines[cls.layer].push({ e, n, z, color: cls.dxfColor });
+
+        // النقطة في طبقة الكود الخاصة بها وباللون الهندسي المميز
+        dxf.push("0", "POINT", "8", cls.layer, "62", String(cls.dxfColor), "10", e.toFixed(4), "20", n.toFixed(4), "30", z.toFixed(4));
+
+        // رسم دائرة حول المطابق (MNH / الصرف) أو أعمدة الإنارة داخل الأوتوكاد تلقائياً
+        if (cls.symbol === "MANHOLE") {
+          dxf.push("0", "CIRCLE", "8", cls.layer, "62", "30", "10", e.toFixed(4), "20", n.toFixed(4), "30", z.toFixed(4), "40", "0.60");
+        } else if (cls.symbol === "LIGHT") {
+          dxf.push("0", "CIRCLE", "8", cls.layer, "62", "2", "10", e.toFixed(4), "20", n.toFixed(4), "30", z.toFixed(4), "40", "0.40");
+        }
+
+        // كتابة رقم النقطة والكود
+        dxf.push("0", "TEXT", "8", `${cls.layer}_ID`, "62", String(cls.dxfColor), "10", (e + 0.45).toFixed(4), "20", (n + 0.35).toFixed(4), "30", z.toFixed(4), "40", "0.50", "1", `${p} (${c})`.trim());
+        // كتابة المنسوب Z
+        dxf.push("0", "TEXT", "8", `${cls.layer}_ELEV`, "62", "7", "10", (e + 0.45).toFixed(4), "20", (n - 0.35).toFixed(4), "30", z.toFixed(4), "40", "0.42", "1", z.toFixed(3));
       });
 
-      if (polyPts.length >= 2) {
-        dxf.push("0", "POLYLINE", "8", "GD_POLYLINE", "66", "1", "70", "8");
-        polyPts.forEach(pt => {
-          dxf.push("0", "VERTEX", "8", "GD_POLYLINE", "10", pt.e.toFixed(4), "20", pt.n.toFixed(4), "30", pt.z.toFixed(4));
-        });
-        dxf.push("0", "SEQEND");
-      }
+      // رسم خطوط Polyline منفصلة لكل طبقة (خط للصرف، خط للطريق، إلخ)
+      Object.entries(groupedPolylines).forEach(([layerName, pts]) => {
+        if (pts.length >= 2 && layerName !== "GD_LIGHT_POLES" && layerName !== "GD_BENCHMARKS") {
+          dxf.push("0", "POLYLINE", "8", `${layerName}_LINE`, "62", String(pts[0].color), "66", "1", "70", "8");
+          pts.forEach(pt => {
+            dxf.push("0", "VERTEX", "8", `${layerName}_LINE`, "10", pt.e.toFixed(4), "20", pt.n.toFixed(4), "30", pt.z.toFixed(4));
+          });
+          dxf.push("0", "SEQEND");
+        }
+      });
 
       dxf.push("0", "ENDSEC", "0", "EOF");
-      downloadBlob(dxf.join("\r\n") + "\r\n", `GeoDev_AutoCAD_${Date.now()}.dxf`, "application/dxf");
-      showExcelLog("📕 تم تصدير لوحة AutoCAD DXF (.dxf) بنجاح!", "success");
+      downloadBlob(dxf.join("\r\n") + "\r\n", `GeoDev_SmartLayers_AutoCAD_${Date.now()}.dxf`, "application/dxf");
+      showExcelLog("📕 تم تصدير لوحة AutoCAD DXF بطبقات ملونة منفصلة للمطابق MNH وأعمدة الإنارة والشمال والجنوب!", "success");
       return;
     }
 
     if (format === "surfer") {
-      const datLines = ["Easting,Northing,Elevation,PointID"];
+      const datLines = ["Easting,Northing,Elevation,PointID,Code"];
       rows.forEach(r => {
         const e = parseFloat(r[eKey]);
         const n = parseFloat(r[nKey]);
         const z = parseFloat(r[zKey]) || 0;
         const p = String(r[pKey] || "");
-        if (!isNaN(e) && !isNaN(n)) {
-          datLines.push(`${e.toFixed(4)},${n.toFixed(4)},${z.toFixed(4)},${p}`);
-        }
+        const c = String(r[cKey] || "");
+        if (!isNaN(e) && !isNaN(n)) datLines.push(`${e.toFixed(4)},${n.toFixed(4)},${z.toFixed(4)},${p},${c}`);
       });
       downloadBlob(datLines.join("\r\n") + "\r\n", `GeoDev_Surfer_${Date.now()}.dat`, "text/plain;charset=utf-8;");
       showExcelLog("🏔️ تم تصدير ملف Golden Software Surfer (.dat) بنجاح!", "success");
@@ -1165,17 +1216,18 @@
     }
 
     if (format === "wkt") {
-      const wktHeader = [...columns, "GEOMETRY_WKT"].join(",");
+      const wktHeader = [...columns, "AI_Category", "CAD_Layer", "GEOMETRY_WKT"].join(",");
       const wktRows = rows.map(r => {
         const e = parseFloat(r[eKey]);
         const n = parseFloat(r[nKey]);
         const z = parseFloat(r[zKey]) || 0;
+        const cls = getRowClassification(r);
         const geom = !isNaN(e) && !isNaN(n) ? `"POINT Z (${e.toFixed(4)} ${n.toFixed(4)} ${z.toFixed(4)})"` : '""';
         const vals = columns.map(col => `"${String(r[col] ?? "").replace(/"/g, '""')}"`);
-        return [...vals, geom].join(",");
+        return [...vals, `"${cls.labelAr}"`, `"${cls.layer}"`, geom].join(",");
       });
       downloadBlob("\uFEFF" + [wktHeader, ...wktRows].join("\n"), `GeoDev_ArcGISPro_WKT_${Date.now()}.csv`, "text/csv;charset=utf-8;");
-      showExcelLog("📊 تم تصدير جدول ArcGIS Pro بحقل GEOMETRY_WKT!", "success");
+      showExcelLog("📊 تم تصدير جدول ArcGIS Pro بالتصنيف الهندسي وحقل POINT Z!", "success");
       return;
     }
 
@@ -1186,9 +1238,10 @@
           const n = parseFloat(r[nKey]);
           if (isNaN(e) || isNaN(n)) return null;
           const ll = projectToWGS84(e, n);
+          const cls = getRowClassification(r);
           return {
             type: "Feature",
-            properties: { ...r, CRS_Source: crsMode },
+            properties: { ...r, AI_Category: cls.labelAr, CAD_Layer: cls.layer, CRS_Source: crsMode },
             geometry: {
               type: "Point",
               coordinates: [Number(ll.lon.toFixed(7)), Number(ll.lat.toFixed(7)), parseFloat(r[zKey]) || 0]
@@ -1198,7 +1251,7 @@
         .filter(Boolean);
 
       downloadBlob(JSON.stringify({ type: "FeatureCollection", features }, null, 2), `GeoDev_ArcGIS_QGIS_${Date.now()}.geojson`, "application/geo+json;charset=utf-8;");
-      showExcelLog("🗺️ تم تصدير طبقة GeoJSON لـ ArcGIS Pro و QGIS!", "success");
+      showExcelLog("🗺️ تم تصدير طبقة GeoJSON لـ ArcGIS Pro و QGIS بالتصنيف الكامل!", "success");
       return;
     }
 
@@ -1210,7 +1263,8 @@
           const z = parseFloat(r[zKey]) || 0;
           if (isNaN(e) || isNaN(n)) return "";
           const ll = projectToWGS84(e, n);
-          return `<Placemark><name>${String(r[pKey] || "")}</name><description>E=${e} | N=${n} | Z=${z} | ${String(r[cKey] || "")}</description><Point><coordinates>${ll.lon.toFixed(7)},${ll.lat.toFixed(7)},${z}</coordinates></Point></Placemark>`;
+          const cls = getRowClassification(r);
+          return `<Placemark><name>${String(r[pKey] || "")} (${cls.labelAr})</name><description>E=${e} | N=${n} | Z=${z} | Code=${String(r[cKey] || "")}</description><Point><coordinates>${ll.lon.toFixed(7)},${ll.lat.toFixed(7)},${z}</coordinates></Point></Placemark>`;
         })
         .join("\n");
       const kml = `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>GeoDev Survey</name>\n${marks}\n</Document></kml>`;
@@ -1266,45 +1320,103 @@
           const p = String(r[pKey] || "").replace(/"/g, "");
           const c = String(r[cKey] || "").replace(/"/g, "");
           if (isNaN(e) || isNaN(n)) return "";
-          return `  (gd-add-pt "${p}" ${e} ${n} ${z} "${c}")`;
+          const cls = getRowClassification(r);
+          return `  (gd-add-pt "${p}" ${e} ${n} ${z} "${c}" "${cls.layer}" ${cls.dxfColor})`;
         })
         .filter(Boolean)
         .join("\n");
 
-      const lispCode = `;;; GeoDev AutoLISP Point Plotter - Command: GD_PLOT_PTS
+      const lispCode = `;;; GeoDev Smart AutoLISP Point Plotter - Command: GD_PLOT_PTS
 (defun c:GD_PLOT_PTS (/ oldosm)
   (setq oldosm (getvar "OSMODE"))
   (setvar "OSMODE" 0)
   (setvar "PDMODE" 34)
   (setvar "PDSIZE" 0.5)
-  (command "_.-LAYER" "_M" "GD_POINTS" "_C" "3" "" "")
-  (command "_.-LAYER" "_M" "GD_LABELS" "_C" "2" "" "")
-  (defun gd-add-pt (pid x y z code)
-    (entmake (list '(0 . "POINT") '(8 . "GD_POINTS") (list 10 x y z)))
-    (entmake (list '(0 . "TEXT") '(8 . "GD_LABELS") (list 10 (+ x 0.4) (+ y 0.4) z) '(40 . 0.55) (cons 1 (strcat pid " | Z=" (rtos z 2 3) " " code))))
+  (defun gd-add-pt (pid x y z code lyr col)
+    (entmake (list '(0 . "POINT") (cons 8 lyr) (cons 62 col) (list 10 x y z)))
+    (entmake (list '(0 . "TEXT") (cons 8 (strcat lyr "_TXT")) (cons 62 col) (list 10 (+ x 0.4) (+ y 0.4) z) '(40 . 0.55) (cons 1 (strcat pid " | Z=" (rtos z 2 3) " " code))))
   )
 ${ptsLisp}
   (setvar "OSMODE" oldosm)
   (command "_.ZOOM" "_E")
-  (princ "\\n[GeoDev] Plotted all points successfully!")
+  (princ "\\n[GeoDev] Plotted all classified survey points!")
   (princ)
 )
 `;
-      downloadBlob(lispCode, `GeoDev_PlotPoints_${Date.now()}.lsp`, "text/plain;charset=utf-8;");
-      showExcelLog("⚡ تم تصدير ملف AutoLISP (.lsp)!", "success");
+      downloadBlob(lispCode, `GeoDev_SmartPlot_${Date.now()}.lsp`, "text/plain;charset=utf-8;");
+      showExcelLog("⚡ تم تصدير ملف AutoLISP الذكي (.lsp) مقسماً لطبقات الأوتوكاد!", "success");
     }
   }
 
   /* ============================================================================
-     محرك الأوامر الذكية (محمي للزوار: يطلب تسجيل الدخول عند التنفيذ)
+     محرك الأوامر الذكية (تصنيف الأكواد + فحص QA/QC + الحسابات المساحية)
      ============================================================================ */
+  function runAutoCodeClassification() {
+    saveSnapshot();
+    if (!columns.includes("التصنيف_الهندسي")) columns.push("التصنيف_الهندسي");
+    if (!columns.includes("طبقة_الأوتوكاد")) columns.push("طبقة_الأوتوكاد");
+
+    rows.forEach(r => {
+      const cls = getRowClassification(r);
+      r["التصنيف_الهندسي"] = cls.labelAr;
+      r["طبقة_الأوتوكاد"] = cls.layer;
+    });
+
+    const st = computeSurveyStats();
+    renderExcelTable();
+    drawCadPreview();
+    showExcelLog(
+      `🏷️ تم تصنيف جميع النقاط هندسياً: [${st.sewerCount} مطبق وصرف MNH] • [${st.lightCount} عمود إنارة] • [${st.nglCount} أرض طبيعية] • [${st.roadCount} طرق] • [${st.dirCount} شمال/جنوب].`,
+      "success"
+    );
+  }
+
+  function runSurveyQAQC() {
+    const { pKey, eKey, nKey, zKey, cKey } = getCoordKeys();
+    let zeroCoords = 0, missingCodes = 0, zJumps = 0, duplicates = 0;
+    const seen = new Set();
+
+    for (let i = 0; i < rows.length; i++) {
+      const e = parseFloat(rows[i][eKey]);
+      const n = parseFloat(rows[i][nKey]);
+      const z = parseFloat(rows[i][zKey]);
+      const code = String(rows[i][cKey] || "").trim();
+
+      if (isNaN(e) || isNaN(n) || e === 0 || n === 0) zeroCoords++;
+      if (!code || code === "----" || code === "-") missingCodes++;
+
+      const key = `${e}_${n}`;
+      if (seen.has(key)) duplicates++;
+      seen.add(key);
+
+      if (i > 0) {
+        const prevZ = parseFloat(rows[i - 1][zKey]);
+        if (!isNaN(z) && !isNaN(prevZ) && Math.abs(z - prevZ) > 5) zJumps++;
+      }
+    }
+
+    showExcelLog(
+      `🩺 تقرير فحص الجودة (QA/QC): [${duplicates} نقطة مكررة] • [${missingCodes} نقطة بدون كود] • [${zJumps} قفزة شاذة في المنسوب Z > 5م] • [${zeroCoords} إحداثي صفري].`,
+      duplicates || zJumps || zeroCoords ? "warn" : "success"
+    );
+  }
+
   function executeAICommand(rawPrompt) {
     const cmd = String(rawPrompt || "").trim();
     if (!cmd) return;
 
-    // إذا كان المستخدم زائراً (غير مسجل دخول)، يظهر له طلب تسجيل الدخول فوراً
     if (!checkAuthState()) {
       openAuthRequiredModal("تشغيل أوامر الذكاء الاصطناعي وحفظ التعديلات");
+      return;
+    }
+
+    if (/تصنيف|صنف|اكواد|أكواد|mnh|انارة|إنارة|صرف/i.test(cmd)) {
+      runAutoCodeClassification();
+      return;
+    }
+
+    if (/فحص|جودة|اخطاء|أخطاء|qa|qc/i.test(cmd)) {
+      runSurveyQAQC();
       return;
     }
 
@@ -1409,45 +1521,73 @@ ${ptsLisp}
       return;
     }
 
-    showExcelLog(`اكتب أمراً مثل: "اجمع 0.50 على Z" أو "احسب المساحة" أو "احسب المسافة والانحراف".`, "info");
+    showExcelLog(`جرّب: "صنف الأكواد تلقائياً" أو "افحص أخطاء الرفع" أو "اجمع 0.50 على Z" أو "احسب المساحة".`, "info");
   }
 
   /* ============================================================================
-     رسم الجدول وشاشة CAD Canvas التفاعلية (Zoom & Pan)
+     رسم الجدول وشاشة CAD Canvas بالرموز الهندسية الحقيقية
      ============================================================================ */
+  function getFilteredRowsWithIndex() {
+    const q = searchFilter.trim().toLowerCase();
+    return rows
+      .map((r, originalIdx) => ({ r, originalIdx, cls: getRowClassification(r) }))
+      .filter(({ r, cls }) => {
+        if (activeCodeFilter !== "ALL" && cls.group !== activeCodeFilter) return false;
+        if (!q) return true;
+        return columns.some(c => String(r[c] ?? "").toLowerCase().includes(q)) || cls.labelAr.toLowerCase().includes(q);
+      });
+  }
+
   function renderExcelTable() {
     const table = document.getElementById("gdExcelDataTable");
     const statsBar = document.getElementById("gdExStatsBar");
+    const filterBar = document.getElementById("gdExCodeFilterBar");
     if (!table) return;
 
     const st = computeSurveyStats();
     if (statsBar) {
       statsBar.innerHTML = `
-        <div class="gd-ex-stat"><span>عدد النقاط</span><strong>${st.count}</strong></div>
-        <div class="gd-ex-stat"><span>أقل منسوب (Min Z)</span><strong>${st.minZ}</strong></div>
-        <div class="gd-ex-stat"><span>أعلى منسوب (Max Z)</span><strong>${st.maxZ}</strong></div>
-        <div class="gd-ex-stat"><span>المحيط / الطول</span><strong>${st.perimeter.toFixed(2)} م</strong></div>
-        <div class="gd-ex-stat"><span>المساحة المغلقة</span><strong>${st.areaM2.toFixed(2)} م²</strong></div>
+        <div class="gd-ex-stat"><span>إجمالي النقاط</span><strong>${st.count}</strong></div>
+        <div class="gd-ex-stat"><span>مطابق وصرف (MNH)</span><strong style="color:#fb923c;">${st.sewerCount}</strong></div>
+        <div class="gd-ex-stat"><span>أعمدة إنارة</span><strong style="color:#facc15;">${st.lightCount}</strong></div>
+        <div class="gd-ex-stat"><span>أرض طبيعية (EG)</span><strong style="color:#4ade80;">${st.nglCount}</strong></div>
+        <div class="gd-ex-stat"><span>شمال / جنوب</span><strong style="color:#38bdf8;">${st.dirCount}</strong></div>
+        <div class="gd-ex-stat"><span>المساحة المغلقة</span><strong>${st.areaM2.toFixed(1)} م²</strong></div>
       `;
     }
 
-    const q = searchFilter.trim().toLowerCase();
-    const filtered = rows
-      .map((r, originalIdx) => ({ r, originalIdx }))
-      .filter(({ r }) => !q || columns.some(c => String(r[c] ?? "").toLowerCase().includes(q)));
+    if (filterBar) {
+      const filters = [
+        { id: "ALL", label: `📋 الكل (${st.count})` },
+        { id: "SEWER", label: `🕳️ الصرف والمطابق (${st.sewerCount})` },
+        { id: "LIGHT", label: `💡 أعمدة الإنارة (${st.lightCount})` },
+        { id: "NGL", label: `⛰️ أرض طبيعية EG (${st.nglCount})` },
+        { id: "ROAD", label: `🛣️ طرق وأرصفة (${st.roadCount})` },
+        { id: "DIR", label: `🧭 شمال / جنوب (${st.dirCount})` }
+      ];
+      filterBar.innerHTML = filters
+        .map(f => `<button type="button" class="gd-ex-filter-pill ${activeCodeFilter === f.id ? "active" : ""}" data-code-filter="${f.id}">${f.label}</button>`)
+        .join("");
+    }
+
+    const filtered = getFilteredRowsWithIndex();
 
     table.innerHTML = `
       <thead>
         <tr>
           <th>#</th>
+          <th>التصنيف الذكي</th>
           ${columns.map(col => `<th>${col}</th>`).join("")}
           <th>حذف</th>
         </tr>
       </thead>
       <tbody>
-        ${filtered.map(({ r, originalIdx }) => `
+        ${filtered.map(({ r, originalIdx, cls }) => `
           <tr>
             <td style="background:#211e1b;color:#a8a29e;font-weight:800;padding:6px 8px;">${originalIdx + 1}</td>
+            <td style="padding:5px 8px;white-space:nowrap;font-size:11px;font-weight:900;color:${cls.color};background:#12100e;">
+              ${cls.labelAr}
+            </td>
             ${columns.map(col => `
               <td>
                 <input type="text" class="gd-ex-cell"
@@ -1472,7 +1612,7 @@ ${ptsLisp}
     const rect = canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
     const W = rect.width || 320;
-    const H = rect.height || 310;
+    const H = rect.height || 320;
 
     canvas.width = Math.max(300, W * dpr);
     canvas.height = Math.max(250, H * dpr);
@@ -1485,13 +1625,16 @@ ${ptsLisp}
     for (let x = 0; x < W; x += 28) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
     for (let y = 0; y < H; y += 28) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
 
-    const { pKey, eKey, nKey, zKey } = getCoordKeys();
-    const pts = rows
-      .map(r => ({
+    const { pKey, eKey, nKey, zKey, cKey } = getCoordKeys();
+    const filteredList = getFilteredRowsWithIndex();
+    const pts = filteredList
+      .map(({ r, cls }) => ({
         p: String(r[pKey] || ""),
+        c: String(r[cKey] || ""),
         e: parseFloat(r[eKey]),
         n: parseFloat(r[nKey]),
-        z: parseFloat(r[zKey])
+        z: parseFloat(r[zKey]),
+        cls
       }))
       .filter(pt => !isNaN(pt.e) && !isNaN(pt.n));
 
@@ -1499,7 +1642,7 @@ ${ptsLisp}
       ctx.fillStyle = "#64748b";
       ctx.font = "bold 13px sans-serif";
       ctx.textAlign = "center";
-      ctx.fillText("لا توجد إحداثيات E / N صالحة للرسم", W / 2, H / 2);
+      ctx.fillText("لا توجد نقاط مطابقة للعرض حالياً", W / 2, H / 2);
       return;
     }
 
@@ -1509,7 +1652,7 @@ ${ptsLisp}
     const maxN = Math.max(...pts.map(p => p.n));
     const spanE = Math.max(maxE - minE, 1);
     const spanN = Math.max(maxN - minN, 1);
-    const pad = 34;
+    const pad = 36;
     const baseScale = Math.min((W - pad * 2) / spanE, (H - pad * 2) / spanN);
     const scale = baseScale * cadZoom;
 
@@ -1523,7 +1666,8 @@ ${ptsLisp}
       y: centerY - (n - midN) * scale
     });
 
-    if (connectLinesOnCanvas && pts.length >= 2) {
+    // رسم خطوط التوصيل (إما حسب الكود أو متسلسلة)
+    if (connectMode === "SEQUENTIAL" && pts.length >= 2) {
       ctx.beginPath();
       ctx.strokeStyle = "#38bdf8";
       ctx.lineWidth = 1.4;
@@ -1533,6 +1677,25 @@ ${ptsLisp}
         else ctx.lineTo(c.x, c.y);
       });
       ctx.stroke();
+    } else if (connectMode === "BY_CODE") {
+      const groups = {};
+      pts.forEach(pt => {
+        if (pt.cls.group === "LIGHT" || pt.cls.group === "NGL") return; // لا نوصل أعمدة الإنارة ببعضها كخط أرض
+        if (!groups[pt.cls.layer]) groups[pt.cls.layer] = [];
+        groups[pt.cls.layer].push(pt);
+      });
+      Object.values(groups).forEach(gPts => {
+        if (gPts.length < 2) return;
+        ctx.beginPath();
+        ctx.strokeStyle = gPts[0].cls.color;
+        ctx.lineWidth = 1.5;
+        gPts.forEach((pt, idx) => {
+          const c = toCanvas(pt.e, pt.n);
+          if (idx === 0) ctx.moveTo(c.x, c.y);
+          else ctx.lineTo(c.x, c.y);
+        });
+        ctx.stroke();
+      });
     }
 
     const visiblePts = [];
@@ -1543,25 +1706,56 @@ ${ptsLisp}
       }
     });
 
-    const allowText = showLabelsOnCanvas && (visiblePts.length <= 85 || cadZoom >= 2.2);
-    const dotRadius = cadZoom >= 3 ? 4.2 : pts.length > 300 ? 2.4 : 3.6;
+    const allowText = showLabelsOnCanvas && (visiblePts.length <= 80 || cadZoom >= 2.2);
 
+    // رسم الرموز الهندسية المميزة لكل كود
     visiblePts.forEach(pt => {
-      ctx.beginPath();
-      ctx.arc(pt.cx, pt.cy, dotRadius, 0, Math.PI * 2);
-      ctx.fillStyle = "#fbbf24";
-      ctx.fill();
+      ctx.strokeStyle = pt.cls.color;
+      ctx.fillStyle = pt.cls.color;
+      ctx.lineWidth = 1.6;
+
+      if (pt.cls.symbol === "MANHOLE") {
+        // رمز مطبق صرف صحي MNH: دائرة مزدوجة برتقالية
+        ctx.beginPath();
+        ctx.arc(pt.cx, pt.cy, 5.5, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(pt.cx, pt.cy, 2.2, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (pt.cls.symbol === "LIGHT") {
+        // رمز عمود إنارة: دائرة صفراء مع إشعاع
+        ctx.beginPath();
+        ctx.arc(pt.cx, pt.cy, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(pt.cx - 7, pt.cy); ctx.lineTo(pt.cx + 7, pt.cy);
+        ctx.moveTo(pt.cx, pt.cy - 7); ctx.lineTo(pt.cx, pt.cy + 7);
+        ctx.stroke();
+      } else if (pt.cls.symbol === "TRIANGLE") {
+        // رمز روبير BM: مثلث
+        ctx.beginPath();
+        ctx.moveTo(pt.cx, pt.cy - 6);
+        ctx.lineTo(pt.cx - 5.5, pt.cy + 4.5);
+        ctx.lineTo(pt.cx + 5.5, pt.cy + 4.5);
+        ctx.closePath();
+        ctx.stroke();
+      } else {
+        ctx.beginPath();
+        ctx.arc(pt.cx, pt.cy, 3.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
 
       if (allowText) {
         ctx.fillStyle = "#f8fafc";
         ctx.font = "bold 10.5px sans-serif";
         ctx.textAlign = "left";
-        const zTxt = !isNaN(pt.z) ? ` (${pt.z.toFixed(2)})` : "";
-        ctx.fillText(`${pt.p}${zTxt}`, pt.cx + 5, pt.cy - 4);
+        const zTxt = !isNaN(pt.z) ? ` Z=${pt.z.toFixed(2)}` : "";
+        const cTxt = pt.c ? ` [${pt.c}]` : "";
+        ctx.fillText(`${pt.p}${cTxt}${zTxt}`, pt.cx + 7, pt.cy - 4);
       }
     });
 
-    ctx.fillStyle = "rgba(15, 23, 42, 0.8)";
+    ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
     ctx.fillRect(W - 115, 8, 107, 22);
     ctx.fillStyle = "#38bdf8";
     ctx.font = "bold 11px sans-serif";
@@ -1595,9 +1789,7 @@ ${ptsLisp}
       drawCadPreview();
     });
 
-    window.addEventListener("mouseup", () => {
-      isDraggingCanvas = false;
-    });
+    window.addEventListener("mouseup", () => { isDraggingCanvas = false; });
 
     wrapper.addEventListener("touchstart", e => {
       if (e.target.closest(".gd-cad-zbtn")) return;
@@ -1639,9 +1831,6 @@ ${ptsLisp}
     });
   }
 
-  /* ============================================================================
-     تحديد مكان العرض: للزوار في أول الموقع / شاشة الدخول، وللأعضاء في قسم المساحة
-     ============================================================================ */
   function findSurveyingSection() {
     const navButtons = Array.from(document.querySelectorAll("nav button, [data-t]"));
     const survBtn = navButtons.find(btn => (btn.textContent || "").trim() === "المساحة");
@@ -1665,11 +1854,8 @@ ${ptsLisp}
   function mountAIExcelStudio() {
     const logged = checkAuthState();
 
-    // إزالة رسالة الزوار إذا قام المستخدم بتسجيل الدخول
     const oldGuestBanner = document.getElementById("gdGuestWelcomeBanner");
-    if (logged && oldGuestBanner) {
-      oldGuestBanner.remove();
-    }
+    if (logged && oldGuestBanner) oldGuestBanner.remove();
 
     if (logged) {
       const targetSec = findSurveyingSection();
@@ -1690,7 +1876,6 @@ ${ptsLisp}
       return;
     }
 
-    // وضع الزائر (قبل تسجيل الدخول): يظهر في أول الموقع مع رسالة ترحيبية
     const guestHost = findGuestLandingHost();
     if (!guestHost) return;
 
@@ -1699,18 +1884,15 @@ ${ptsLisp}
       banner.id = "gdGuestWelcomeBanner";
       banner.innerHTML = `
         <div>
-          <strong>👋 أهلاً بك في منصة GeoDev — جرّب محطة إكسيل المساحة مجاناً قبل تسجيل الدخول!</strong>
-          <span>ارفع ملفات (Excel / DXF / CSV / SDR) من هاتفك وعاين الرسمة في لوحة الأوتوكاد الحية فوراً. سجّل الدخول لحفظ وتصدير الملفات.</span>
+          <strong>👋 أهلاً بك في منصة GeoDev — جرّب محطة إكسيل المساحة الذكية مجاناً قبل تسجيل الدخول!</strong>
+          <span>ارفع ملفات (Excel / DXF / CSV / SDR) وعاين مطابق MNH وأعمدة الإنارة في لوحة الكاد الحية فوراً. سجّل الدخول لحفظ وتصدير الملفات.</span>
         </div>
         <button type="button" id="gdBannerScrollLoginBtn" class="gd-ex-btn gold">
           🔐 تسجيل الدخول / إنشاء حساب
         </button>
       `;
-      if (guestHost === document.body) {
-        document.body.prepend(banner);
-      } else {
-        guestHost.appendChild(banner);
-      }
+      if (guestHost === document.body) document.body.prepend(banner);
+      else guestHost.appendChild(banner);
     }
 
     let container = document.getElementById("gdAiExcelStudio");
@@ -1719,11 +1901,8 @@ ${ptsLisp}
       container.id = "gdAiExcelStudio";
       container.innerHTML = renderStudioHTML();
       const bannerEl = document.getElementById("gdGuestWelcomeBanner");
-      if (bannerEl && bannerEl.parentElement) {
-        bannerEl.insertAdjacentElement("afterend", container);
-      } else {
-        guestHost.appendChild(container);
-      }
+      if (bannerEl && bannerEl.parentElement) bannerEl.insertAdjacentElement("afterend", container);
+      else guestHost.appendChild(container);
       renderExcelTable();
       bindCanvasInteractions();
       setTimeout(drawCadPreview, 80);
@@ -1747,6 +1926,23 @@ ${ptsLisp}
         return;
       }
 
+      if (e.target.closest("#gdExAutoClassifyBtn")) {
+        if (!checkAuthState()) {
+          openAuthRequiredModal("تصنيف الأكواد وإضافة أعمدة الطبقات بالذكاء الاصطناعي");
+          return;
+        }
+        runAutoCodeClassification();
+        return;
+      }
+
+      const filterBtn = e.target.closest("[data-code-filter]");
+      if (filterBtn) {
+        activeCodeFilter = filterBtn.dataset.codeFilter;
+        renderExcelTable();
+        drawCadPreview();
+        return;
+      }
+
       const chip = e.target.closest("[data-ai-cmd]");
       if (chip) {
         const cmd = chip.dataset.aiCmd;
@@ -1756,20 +1952,9 @@ ${ptsLisp}
         return;
       }
 
-      if (e.target.closest("#gdCadZoomInBtn")) {
-        cadZoom = Math.min(80, cadZoom * 1.45);
-        drawCadPreview();
-        return;
-      }
-      if (e.target.closest("#gdCadZoomOutBtn")) {
-        cadZoom = Math.max(0.3, cadZoom / 1.45);
-        drawCadPreview();
-        return;
-      }
-      if (e.target.closest("#gdCadZoomResetBtn")) {
-        resetCadView();
-        return;
-      }
+      if (e.target.closest("#gdCadZoomInBtn")) { cadZoom = Math.min(80, cadZoom * 1.45); drawCadPreview(); return; }
+      if (e.target.closest("#gdCadZoomOutBtn")) { cadZoom = Math.max(0.3, cadZoom / 1.45); drawCadPreview(); return; }
+      if (e.target.closest("#gdCadZoomResetBtn")) { resetCadView(); return; }
 
       const subTab = e.target.closest("[data-ex-subtab]");
       if (subTab) {
@@ -1785,10 +1970,7 @@ ${ptsLisp}
       if (e.target.closest("#gdParseAcadListBtn")) {
         const txt = document.getElementById("gdAcadListPasteArea")?.value || "";
         const extracted = parseAutoCADListText(txt);
-        if (!extracted.length) {
-          showExcelLog("لم يتم العثور على إحداثيات X= ... Y= ... في النص الملصق.", "error");
-          return;
-        }
+        if (!extracted.length) return showExcelLog("لم يتم العثور على إحداثيات X= ... Y= ... في النص الملصق.", "error");
         saveSnapshot();
         rows.push(...extracted);
         renderExcelTable();
@@ -1798,10 +1980,7 @@ ${ptsLisp}
       }
 
       if (e.target.closest("#gdApplyShiftBtn")) {
-        if (!checkAuthState()) {
-          openAuthRequiredModal("تطبيق إزاحة الإحداثيات وحفظ التعديلات");
-          return;
-        }
+        if (!checkAuthState()) return openAuthRequiredModal("تطبيق إزاحة الإحداثيات وحفظ التعديلات");
         const dE = parseFloat(document.getElementById("gdShiftE")?.value) || 0;
         const dN = parseFloat(document.getElementById("gdShiftN")?.value) || 0;
         const dZ = parseFloat(document.getElementById("gdShiftZ")?.value) || 0;
@@ -1815,34 +1994,22 @@ ${ptsLisp}
         });
         renderExcelTable();
         drawCadPreview();
-        showExcelLog(`✅ تم تطبيق إزاحة الإحداثيات (ΔE=${dE}, ΔN=${dN}, ΔZ=${dZ}) بنجاح.`, "success");
+        showExcelLog(`✅ تم تطبيق إزاحة الإحداثيات (ΔE=${dE}, ΔN=${dN}, ΔZ=${dZ}).`, "success");
         return;
       }
 
       if (e.target.closest("#gdCalcCutFillBtn")) {
-        if (!checkAuthState()) {
-          openAuthRequiredModal("حساب كميات الحفر والردم وتصديرها");
-          return;
-        }
+        if (!checkAuthState()) return openAuthRequiredModal("حساب كميات الحفر والردم وتصديرها");
         const designLvl = parseFloat(document.getElementById("gdDesignLevelInput")?.value);
         if (isNaN(designLvl)) return showExcelLog("أدخل منسوب التصميم أولاً.", "error");
         saveSnapshot();
         const { zKey } = getCoordKeys();
         if (!columns.includes("Cut_Fill")) columns.push("Cut_Fill");
-        let totalCut = 0, totalFill = 0;
         rows.forEach(r => {
           const z = parseFloat(r[zKey]);
           if (!isNaN(z)) {
             const diff = z - designLvl;
-            if (diff > 0) {
-              r.Cut_Fill = `Cut +${diff.toFixed(3)}`;
-              totalCut += diff;
-            } else if (diff < 0) {
-              r.Cut_Fill = `Fill ${diff.toFixed(3)}`;
-              totalFill += Math.abs(diff);
-            } else {
-              r.Cut_Fill = "0.000";
-            }
+            r.Cut_Fill = diff > 0 ? `Cut +${diff.toFixed(3)}` : diff < 0 ? `Fill ${diff.toFixed(3)}` : "0.000";
           }
         });
         renderExcelTable();
@@ -1860,7 +2027,7 @@ ${ptsLisp}
         });
         renderExcelTable();
         resetCadView();
-        showExcelLog("🔄 تم تبديل إحداثيات الشرق (E) والشمال (N) للمعاينة.", "success");
+        showExcelLog("🔄 تم تبديل إحداثيات الشرق (E) والشمال (N).", "success");
         return;
       }
 
@@ -1873,19 +2040,6 @@ ${ptsLisp}
         rows.push(obj);
         renderExcelTable();
         drawCadPreview();
-        return;
-      }
-
-      if (e.target.closest("#gdExAddColBtn")) {
-        const colName = prompt("أدخل اسم العمود الجديد (مثال: Offset أو Note):");
-        if (!colName || !colName.trim()) return;
-        const clean = colName.trim();
-        if (!columns.includes(clean)) {
-          saveSnapshot();
-          columns.push(clean);
-          rows.forEach(r => (r[clean] = ""));
-          renderExcelTable();
-        }
         return;
       }
 
@@ -1910,7 +2064,22 @@ ${ptsLisp}
       }
 
       if (e.target.closest("#gdToggleLabelsBtn")) { showLabelsOnCanvas = !showLabelsOnCanvas; drawCadPreview(); return; }
-      if (e.target.closest("#gdToggleLinesBtn")) { connectLinesOnCanvas = !connectLinesOnCanvas; drawCadPreview(); return; }
+
+      const cycleBtn = e.target.closest("#gdCycleConnectBtn");
+      if (cycleBtn) {
+        if (connectMode === "BY_CODE") {
+          connectMode = "SEQUENTIAL";
+          cycleBtn.textContent = "📏 توصيل: متسلسل";
+        } else if (connectMode === "SEQUENTIAL") {
+          connectMode = "NONE";
+          cycleBtn.textContent = "📏 توصيل: بدون خطوط";
+        } else {
+          connectMode = "BY_CODE";
+          cycleBtn.textContent = "📏 توصيل: حسب الكود";
+        }
+        drawCadPreview();
+        return;
+      }
 
       const expBtn = e.target.closest("[data-export-fmt]");
       if (expBtn) exportData(expBtn.dataset.exportFmt);
@@ -1969,7 +2138,7 @@ ${ptsLisp}
     if (!attach()) {
       const iv = setInterval(() => {
         if (attach()) clearInterval(iv);
-      }, 350);
+      }, 400);
       setTimeout(() => clearInterval(iv), 10000);
     }
   }
@@ -1980,13 +2149,6 @@ ${ptsLisp}
     bindEvents();
     mountAIExcelStudio();
     startAuthWatcher();
-
-    const obs = new MutationObserver(() => {
-      mountAIExcelStudio();
-    });
-    if (document.body) {
-      obs.observe(document.body, { childList: true, subtree: true });
-    }
   }
 
   if (document.readyState === "loading") {
