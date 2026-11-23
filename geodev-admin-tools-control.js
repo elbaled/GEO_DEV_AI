@@ -1,18 +1,18 @@
 /* ============================================================================
-   GeoDev Admin Tools & Tiers Controller (V1.2 - 3-Day Free Trial Edition)
-   - يمنح المستخدم فترة تجربة مجانية 3 أيام (72 ساعة) للأدوات المدفوعة (PLUS / PRO)
-   - يعرض رسالة: "معاك 3 أيام تجربة مجانية..." طوال فترة التجربة
-   - بعد انتهاء الـ 3 أيام: يغلق الأداة ويعرض رسالة الترقية والاشتراك
+   GeoDev Admin Tools & Tiers Controller (V1.3 - 2-Day Free Trial Edition)
+   - يمنح المستخدم فترة تجربة مجانية يومين فقط (48 ساعة) للأدوات المدفوعة (PLUS / PRO)
+   - يخصم يوماً تلقائياً من المستخدمين المسجلين سابقاً (يحسب 48 ساعة من startedAt)
+   - بعد انتهاء اليومين: يغلق الأداة ويعرض رسالة الاشتراك والترقية فوراً
    ============================================================================ */
 (function () {
   "use strict";
-  if (window.GeoDevAdminToolsCtrlV12Init) return;
-  window.GeoDevAdminToolsCtrlV12Init = true;
+  if (window.GeoDevAdminToolsCtrlV13Init) return;
+  window.GeoDevAdminToolsCtrlV13Init = true;
 
   const ADMIN_EMAIL = "eng.ahmedsamir.gis@gmail.com";
   const STORAGE_KEY = "gd_custom_tools_permissions_v1";
   const TRIAL_LOCAL_KEY = "gd_tools_trials_v1";
-  const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+  const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000; // 48 ساعة (يومين فقط)
 
   const managedTools = [
     {
@@ -98,9 +98,18 @@
         snap.docs.forEach(doc => {
           const d = doc.data();
           if (d && d.startedAt) {
-            // نأخذ التاريخ الأقدم لمنع إعادة تعيين التجربة
+            const started = Number(d.startedAt);
             const localStart = Number(userTrialsMap[doc.id] || 0);
-            userTrialsMap[doc.id] = localStart ? Math.min(localStart, Number(d.startedAt)) : Number(d.startedAt);
+            userTrialsMap[doc.id] = localStart ? Math.min(localStart, started) : started;
+
+            // تحديث تاريخ الانتهاء في السحابة ليعكس قاعدة اليومين (48 ساعة) بدلاً من 3 أيام
+            const expectedExpiry = userTrialsMap[doc.id] + TWO_DAYS_MS;
+            if (!d.expiresAt || Number(d.expiresAt) > expectedExpiry) {
+              db.collection("users").doc(uid).collection("tool_trials").doc(doc.id).set(
+                { startedAt: userTrialsMap[doc.id], expiresAt: expectedExpiry },
+                { merge: true }
+              ).catch(() => {});
+            }
           }
         });
         localStorage.setItem(TRIAL_LOCAL_KEY, JSON.stringify(userTrialsMap));
@@ -117,19 +126,19 @@
       userTrialsMap[toolId] = startedAt;
       localStorage.setItem(TRIAL_LOCAL_KEY, JSON.stringify(userTrialsMap));
 
-      // حفظ بداية التجربة في حساب المستخدم على Firestore
       if (currentUid) {
         const db = getDb();
         if (db) {
           db.collection("users").doc(currentUid).collection("tool_trials").doc(toolId).set(
-            { startedAt, expiresAt: startedAt + THREE_DAYS_MS },
+            { startedAt, expiresAt: startedAt + TWO_DAYS_MS },
             { merge: true }
           ).catch(() => {});
         }
       }
     }
 
-    const remainingMs = (startedAt + THREE_DAYS_MS) - now;
+    // الحساب يتم دائماً على 48 ساعة فقط من لحظة البداية (يخصم يوماً من أصحاب الـ 3 أيام تلقائياً)
+    const remainingMs = (startedAt + TWO_DAYS_MS) - now;
     if (remainingMs <= 0) {
       return { active: false, remainingText: "" };
     }
@@ -269,9 +278,9 @@
 
       panel.innerHTML = `
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
-          <strong style="font-size:14.5px;color:#d97706;">🛠️ التحكم في الأدوات والمحطات الحديثة (مجاني / PLUS / PRO / مقفول)</strong>
+          <strong style="font-size:14.5px;color:#d97706;">التحكم في الأدوات والمحطات الحديثة (مجاني / PLUS / PRO / مقفول)</strong>
           <span id="gdCustomToolsSaveStatus" style="font-size:11.5px;font-weight:800;color:#64748b;">
-            الأدوات المدفوعة تمنح 3 أيام تجربة مجانية تلقائياً
+            الأدوات المدفوعة تمنح يومين (48 ساعة) تجربة مجانية تلقائياً
           </span>
         </div>
 
@@ -285,10 +294,10 @@
                   <div style="font-size:11px;color:var(--mt,#94a3b8);">${tool.category}</div>
                 </div>
                 <select data-gd-tool-tier-select="${tool.id}"
-                  style="min-width:125px;padding:7px 10px;border-radius:9px;border:1.5px solid ${tierColors[cur] || "#64748b"};background:var(--bg,#0f172a);color:${tierColors[cur] || "#fff"};font-weight:900;font-size:12.5px;cursor:pointer;font-family:inherit;">
+                  style="min-width:135px;padding:7px 10px;border-radius:9px;border:1.5px solid ${tierColors[cur] || "#64748b"};background:var(--bg,#0f172a);color:${tierColors[cur] || "#fff"};font-weight:900;font-size:12.5px;cursor:pointer;font-family:inherit;">
                   <option value="free" ${cur === "free" ? "selected" : ""}>مجاني (مفتوحة)</option>
-                  <option value="plus" ${cur === "plus" ? "selected" : ""}>PLUS (بلس + 3 أيام تجربة)</option>
-                  <option value="pro" ${cur === "pro" ? "selected" : ""}>PRO (برو + 3 أيام تجربة)</option>
+                  <option value="plus" ${cur === "plus" ? "selected" : ""}>PLUS (بلس + يومين تجربة)</option>
+                  <option value="pro" ${cur === "pro" ? "selected" : ""}>PRO (برو + يومين تجربة)</option>
                   <option value="locked" ${cur === "locked" ? "selected" : ""}>مقفول (مخفي)</option>
                 </select>
               </div>
@@ -320,13 +329,11 @@
         const existingOverlay = el.querySelector(`#${lockId}`);
         const existingBanner = el.querySelector(`#${trialBannerId}`);
 
-        // 1. إذا كان مقفولاً من الإدارة
         if (reqTier === "locked" && userTier !== "admin") {
           el.style.display = "none";
           return;
         }
 
-        // 2. إذا كان المستخدم يملك صلاحية مباشرة (أدمن / مجاني / مشترك بالفعل)
         if (hasDirectSubscriptionAccess(reqTier)) {
           el.style.display = "";
           if (existingOverlay) existingOverlay.remove();
@@ -334,9 +341,8 @@
           return;
         }
 
-        // 3. الأداة تتطلب PLUS أو PRO والمستخدم غير مشترك -> فحص فترة التجربة المجانية 3 أيام
         const trial = getOrStartToolTrial(tool.id);
-        const stateSig = `${reqTier}_${trial.active ? "trial" : "expired"}_${userTier}`;
+        const stateSig = `${reqTier}_${trial.active ? "trial2d" : "expired2d"}_${userTier}`;
         if (!forceRefresh && el.dataset.gdAppliedTier === stateSig) return;
         el.dataset.gdAppliedTier = stateSig;
 
@@ -344,7 +350,6 @@
         const badgeName = reqTier === "plus" ? "باقة PLUS أو PRO" : "باقة PRO";
 
         if (trial.active) {
-          // الأداة مفتوحة خلال الـ 3 أيام التجريبية مع رسالة تنبيه في الأعلى
           if (existingOverlay) existingOverlay.remove();
 
           let banner = existingBanner;
@@ -364,9 +369,9 @@
 
           banner.innerHTML = `
             <div>
-              <strong style="color:#fbbf24;">⏳ معاك 3 أيام تجربة مجانية لاستخدام هذه الأداة (${trial.remainingText})</strong>
+              <strong style="color:#fbbf24;">معاك يومين تجربة مجانية لاستخدام هذه الأداة (${trial.remainingText})</strong>
               <div style="font-size:11.5px;color:#e7e5e4;margin-top:2px;">
-                استمتع بكافة المميزات مجاناً الآن — بعد انتهاء الفترة التجريبية تتطلب الأداة الاشتراك في <b>${badgeName}</b>.
+                استمتع بكافة المميزات مجاناً الآن — بعد انتهاء اليومين تتطلب الأداة الاشتراك في <b>${badgeName}</b>.
               </div>
             </div>
             <a href="https://wa.me/201015912371?text=${encodeURIComponent("مرحباً م. أحمد، أريد الاشتراك في " + badgeName + " على منصة GeoDev")}"
@@ -376,7 +381,6 @@
             </a>
           `;
         } else {
-          // انتهت الـ 3 أيام التجريبية -> إظهار شاشة القفل والترقية
           if (existingBanner) existingBanner.remove();
           el.style.position = "relative";
 
@@ -391,20 +395,22 @@
               padding: 20px; color: #f8fafc;
             `;
             overlay.innerHTML = `
-              <div style="font-size:32px;margin-bottom:8px;">🔒</div>
-              <div style="font-size:12px;font-weight:900;color:#f87171;margin-bottom:4px;">
-                انتهت فترة الـ 3 أيام التجريبية المجانية
+              <div style="width:48px;height:48px;border-radius:14px;background:rgba(224,159,36,0.16);border:1.5px solid #e09f24;display:grid;place-items:center;color:#fbbf24;font-weight:900;font-size:18px;margin-bottom:10px;">
+                PRO
+              </div>
+              <div style="font-size:12.5px;font-weight:900;color:#f87171;margin-bottom:4px;">
+                انتهت فترة اليومين التجريبية المجانية
               </div>
               <h4 style="margin:0 0 8px;font-size:16.5px;font-weight:900;color:#fbbf24;">
                 أداة «${tool.name}» متاحة لمشتركي ${badgeName}
               </h4>
               <p style="margin:0 0 14px;font-size:12.5px;color:#cbd5e1;max-width:370px;line-height:1.7;">
-                لقد استنفدت فترة التجربة المجانية (3 أيام). قم بترقية حسابك إلى <b>${badgeName}</b> للاستمرار في استخدام هذه الأداة وجميع أدوات المكتب الفني.
+                لقد استنفدت فترة التجربة المجانية (يومين). قم بترقية حسابك إلى <b>${badgeName}</b> للاستمرار في استخدام هذه الأداة وجميع أدوات المكتب الفني.
               </p>
               <a href="https://wa.me/201015912371?text=${encodeURIComponent("مرحباً م. أحمد، انتهت فترة التجربة وأريد تفعيل " + badgeName + " على منصة GeoDev")}"
                  target="_blank" rel="noopener noreferrer"
                  style="padding:11px 20px;border-radius:11px;background:linear-gradient(135deg,#e09f24,#b45309);color:#141210;font-weight:900;font-size:13.5px;text-decoration:none;">
-                ⚡ تفعيل ${badgeName} الآن
+                تفعيل ${badgeName} الآن
               </a>
             `;
             el.appendChild(overlay);
