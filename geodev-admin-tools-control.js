@@ -678,4 +678,17 @@
   } else {
     init();
   }
+  // تقليص أي فترة تجريبية قادمة من السيرفر إلى يومين (48 ساعة) من تاريخ التسجيل
+  const _origMe = window.me;
+  if (typeof _origMe === "function") {
+    window.me = function () {
+      const u = _origMe.apply(this, arguments);
+      if (u && u.trialEnd && u.created) {
+        const maxTwoDays = Number(u.created) + TWO_DAYS_MS;
+        if (u.trialEnd > maxTwoDays) u.trialEnd = maxTwoDays;
+      }
+      return u;
+    };
+  }
+
 })();
