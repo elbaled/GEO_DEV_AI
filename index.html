@@ -7,7 +7,7 @@
 <meta name="color-scheme" content="dark">
 <title>GeoDev Studio Pro | م. أحمد سمير</title>
 <meta name="description" content="GeoDev Studio Pro — منصة عربية للمساحة والجيوماتكس وGIS: أدوات هندسية، مساعد ذكاء اصطناعي، وتحويل إحداثيات. تطوير م. أحمد سمير.">
-<meta name="theme-color" content="#0f172a">
+<meta name="theme-color" content="#141210">
 <meta property="og:type" content="website">
 <meta property="og:title" content="GeoDev Studio Pro | م. أحمد سمير">
 <meta property="og:description" content="أدوات مساحة وجيوماتكس ومساعد ذكي في مكان واحد.">
@@ -27,9 +27,12 @@
 <style>
 :root{
   color-scheme:dark;
-  --bg:#090d16;--cd:#0f172a;--ln:#1e293b;--bl:#3b82f6;--gr:#10b981;
-  --am:#f59e0b;--mt:#94a3b8;--tx:#f1f5f9;
+  --bg:#141210;--cd:#1e1b18;--ln:#38332e;--bl:#e09f24;--gr:#10b981;
+  --am:#fbbf24;--mt:#a8a29e;--tx:#f5f5f4;
 }
+html.gd-skip-gate #gate{display:none!important}
+html:not(.gd-gate-ready) #gate .gt{opacity:0;transform:translateY(8px)}
+#gate .gt{transition:opacity .22s ease,transform .22s ease}
 *{box-sizing:border-box;font-family:Cairo,sans-serif;-webkit-tap-highlight-color:transparent}
 html{padding-top:env(safe-area-inset-top,0px)}
 body{margin:0;background:var(--bg);color:var(--tx);font-size:15px;padding-bottom:72px;overflow-x:hidden}
@@ -345,6 +348,25 @@ details{margin-bottom:8px}summary{cursor:pointer;color:var(--bl);margin-bottom:6
   <link rel="apple-touch-icon" href="icon-512.png">
 
 <link rel="apple-touch-icon" href="icon.svg">
+<script>
+(function(){
+  try {
+    var r = document.documentElement;
+    if (localStorage.getItem('gd_light') === '1') {
+      r.classList.add('light');
+    } else {
+      var th = JSON.parse(localStorage.getItem('gd_theme') || 'null');
+      if (th && typeof th === 'object') {
+        Object.keys(th).forEach(function(k){ r.style.setProperty('--' + k, th[k]); });
+      }
+    }
+    if (sessionStorage.getItem('gd_auth') === '1' || localStorage.getItem('gd_guest_mode_active_v1') === '1') {
+      r.classList.add('gd-skip-gate');
+    }
+    setTimeout(function(){ r.classList.add('gd-gate-ready'); }, 220);
+  } catch (e) {}
+})();
+</script>
 </head>
 <body>
 <div id="gate"><div class="card gt">
@@ -1968,7 +1990,7 @@ window.openTool=function(id){
 /* GeoDev Studio Pro — Patch v2.9
    الاستخدام: ضع <script src="geo-patch.js"><\/script> قبل سكربت الـ serviceWorker في آخر index.html */
 const GOOGLE_CLIENT_ID="310415906594-v9gceucmp5c2qh0tjhtklmssijpb9u3l.apps.googleusercontent.com";     // ← ضع Client ID من Google Cloud Console لتفعيل الدخول بجوجل
-const D3=3*864e5,DAY=864e5;
+const D3=2*864e5,DAY=864e5;
 let proConfig = JSON.parse(localStorage.getItem("gd_pro_config")) || {
   tools: ['triangle','map','coord','compass','qibla'],
   engines: ['g38','g52'],
@@ -2029,7 +2051,7 @@ function afterLogin(){personalize();refreshUI();if(!hist.length){$("chat").inner
 function showPro(mode){
  document.getElementById("proM")?.remove();
  const L=proLeft(),m=me(),paid=m&&m.proUntil>Date.now(),day=x=>Math.ceil(x/DAY);
- const head=isAdm()?"حساب الأدمن — كل المزايا مفعّلة":paid?`اشتراك PRO فعّال — متبقي ${day(m.proUntil-Date.now())} يوم`:L>0?`تجربة مجانية لمدة 3 أيام — متبقي ${day(L)} يوم`:"انتهت التجربة المجانية — أنت الآن ضيف في الباقة المجانية";
+ const head=isAdm()?"حساب الأدمن — كل المزايا مفعّلة":paid?`اشتراك PRO فعّال — متبقي ${day(m.proUntil-Date.now())} يوم`:L>0?`تجربة مجانية لمدة يومين — متبقي ${day(L)} يوم`:"انتهت التجربة المجانية — أنت الآن ضيف في الباقة المجانية";
  document.body.insertAdjacentHTML("beforeend",`<div id="proM" class="tool-modal on" style="z-index:110" onclick="if(event.target===this)this.remove()"><div class="tool-content" style="padding:20px">
  <button class="close-btn" style="position:absolute;top:6px;right:8px;z-index:5" onclick="document.getElementById('proM').remove()">✕</button>
  <div style="text-align:center;padding-top:14px"><h3 style="font-size:17px">أهلاً ${esc(uname())}</h3><div class="trial">${head}</div></div>
@@ -2188,6 +2210,7 @@ const _al=adminLoad;adminLoad=function(){_al();listCodes()};
 <script src="geo-formal-icons.js"></script>
 <script src="geo-performance-control.js"></script>
 <script src="geo-login-fx.js"></script>
+<script>document.documentElement.classList.add("gd-gate-ready");</script>
 <script src="geo-onboarding-tour.js"></script>
 <script src="geo-multimodal-voice.js"></script>
 <script src="geo-pwa-push.js?v=1"></script>
@@ -2203,7 +2226,7 @@ const _al=adminLoad;adminLoad=function(){_al();listCodes()};
 <script src="geo-dawod-archive.js"></script>
 <script src="geo-admin-analytics.js"></script>
 <script src="floating-banners-queue.js"></script>
-<script src="geodev-floating-controls.js?v=2"></script>
+<script src="geodev-floating-controls.js?v=3"></script>
 
 <!-- 4. نظام الـ 3 أيام التجريبية + تصنيف حسابات الأدمن + استطلاع الأوتوكاد -->
 <script src="trial-3days-guard.js?v=3"></script>
