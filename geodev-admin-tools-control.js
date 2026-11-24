@@ -1,20 +1,23 @@
 /* ============================================================================
-   GeoDev Admin Tools, 2-Day Trials & Tutorial Video Gate (V1.4)
-   - يعرض نافذة إجبارية (قابلة للإلغاء) لفيديو شرح استخدام الأداة لجميع الحسابات
-   - يمنح فترة تجربة مجانية يومين (48 ساعة) للأدوات المدفوعة (PLUS / PRO)
-   - لوحة تحكم الأدمن لتحديد مستوى الوصول لكل أداة (مجاني / PLUS / PRO / مقفول)
+   GeoDev Admin Tools, Cutoff Trial & Tutorial Video Gate (V1.5)
+   - يقفل الأداة فوراً على الحسابات المسجلة من يوم 22 نوفمبر 2026 فما أقدم
+   - يمنح الحسابات المسجلة من 23 نوفمبر 2026 فترة تجربة يومين (48 ساعة) فقط
+   - يعرض شاشة الاشتراك باسم المستخدم + نافذة فيديو شرح استخدام الأداة
    ============================================================================ */
 (function () {
   "use strict";
-  if (window.GeoDevAdminToolsCtrlV14Init) return;
-  window.GeoDevAdminToolsCtrlV14Init = true;
+  if (window.GeoDevAdminToolsCtrlV15Init) return;
+  window.GeoDevAdminToolsCtrlV15Init = true;
 
   const ADMIN_EMAIL = "eng.ahmedsamir.gis@gmail.com";
-  const STORAGE_KEY = "gd_custom_tools_permissions_v1";
-  const TRIAL_LOCAL_KEY = "gd_tools_trials_v1";
+  const STORAGE_KEY = "gd_custom_tools_permissions_v2";
+  const TRIAL_LOCAL_KEY = "gd_tools_trials_v2";
   const TUTORIAL_SEEN_PREFIX = "gd_excel_tut_v1_seen_";
   const TUTORIAL_VIDEO_ID = "JrYV7iNl66I";
   const TUTORIAL_VIDEO_URL = "https://youtu.be/JrYV7iNl66I?si=w-bQyCGmFcvzyjpf";
+
+  // الحد الفاصل: 23 نوفمبر 2026 الساعة 00:00 بتوقيت مصر (أي حساب من يوم 22 لورا مقفول فوراً)
+  const CUTOFF_NOV_23_MS = new Date("2026-11-23T00:00:00+02:00").getTime();
   const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000; // 48 ساعة
 
   const managedTools = [
@@ -23,14 +26,14 @@
       name: "محطة إكسيل المساحة الذكية (AI Survey & GIS Excel)",
       category: "أدوات المساحة والـ GIS المتقدمة",
       selector: "#gdAiExcelStudio",
-      defaultTier: "free"
+      defaultTier: "plus"
     },
     {
       id: "pipe_trench_calc",
       name: "حاسبة أعمال الصرف والحفر (قاع الحفر وظهر الماسورة)",
       category: "أدوات المساحة والـ GIS المتقدمة",
       selector: "#gdPipeCalcCard",
-      defaultTier: "free"
+      defaultTier: "plus"
     },
     {
       id: "code_lisp_studio",
@@ -59,6 +62,9 @@
   let userTrialsMap = {};
   let userTier = "free";
   let currentUid = null;
+  let currentUserName = "";
+  let currentUserEmail = "";
+  let userCreatedAtMs = 0;
   let isRendering = false;
   let debounceTimer = null;
 
@@ -71,8 +77,30 @@
     return null;
   }
 
+  function resolveUserDisplayName(user, docData = {}) {
+    const fromDoc = docData.name || docData.fullName || docData.displayName || "";
+    const fromAuth = (user && user.displayName) || "";
+    const fromSession = sessionStorage.getItem("gd_name") || "";
+    const fromEmail = (user && user.email) ? user.email.split("@")[0] : "";
+    const chosen = String(fromDoc || fromAuth || fromSession || fromEmail || "مهندسنا العزيز").trim();
+    return chosen === "ضيف" && fromEmail ? fromEmail : chosen;
+  }
+
+  function parseTimestampMs(val) {
+    if (!val) return 0;
+    if (typeof val === "number") return val;
+    if (typeof val.toMillis === "function") return val.toMillis();
+    if (val.seconds) return val.seconds * 1000;
+    const parsed = Date.parse(String(val));
+    return isNaN(parsed) ? 0 : parsed;
+  }
+
+  function isLegacyBeforeNov23() {
+    return userCreatedAtMs > 0 && userCreatedAtMs < CUTOFF_NOV_23_MS;
+  }
+
   /* ============================================================================
-     نافذة فيديو شرح استخدام الأداة (تظهر لجميع الحسابات وتغلق الاستخدام حتى المشاهدة أو الإلغاء)
+     نافذة فيديو شرح استخدام الأداة
      ============================================================================ */
   function getTutorialStorageKey() {
     return TUTORIAL_SEEN_PREFIX + (currentUid || "guest");
@@ -189,7 +217,7 @@
   }
 
   /* ============================================================================
-     إدارة الصلاحيات وفترة التجربة المجانية (يومين)
+     إدارة الصلاحيات وفترة التجربة (قفل من 22 نوفمبر لورا / 48 ساعة من 23 نوفمبر)
      ============================================================================ */
   function loadLocalData() {
     try {
@@ -224,14 +252,6 @@
             const started = Number(d.startedAt);
             const localStart = Number(userTrialsMap[doc.id] || 0);
             userTrialsMap[doc.id] = localStart ? Math.min(localStart, started) : started;
-
-            const expectedExpiry = userTrialsMap[doc.id] + TWO_DAYS_MS;
-            if (!d.expiresAt || Number(d.expiresAt) > expectedExpiry) {
-              db.collection("users").doc(uid).collection("tool_trials").doc(doc.id).set(
-                { startedAt: userTrialsMap[doc.id], expiresAt: expectedExpiry },
-                { merge: true }
-              ).catch(() => {});
-            }
           }
         });
         localStorage.setItem(TRIAL_LOCAL_KEY, JSON.stringify(userTrialsMap));
@@ -240,11 +260,17 @@
   }
 
   function getOrStartToolTrial(toolId) {
+    // 1. أي حساب مسجل يوم 22 نوفمبر 2026 أو قبله: مقفول فوراً بدون فترة سماح إضافية
+    if (isLegacyBeforeNov23()) {
+      return { active: false, remainingText: "", reason: "legacy_cutoff" };
+    }
+
     const now = Date.now();
     let startedAt = Number(userTrialsMap[toolId] || 0);
 
+    // 2. الحسابات المسجلة من 23 نوفمبر فصاعداً: تحصل على 48 ساعة من وقت تسجيلها أو فتح الأداة
     if (!startedAt) {
-      startedAt = now;
+      startedAt = userCreatedAtMs >= CUTOFF_NOV_23_MS ? userCreatedAtMs : now;
       userTrialsMap[toolId] = startedAt;
       localStorage.setItem(TRIAL_LOCAL_KEY, JSON.stringify(userTrialsMap));
 
@@ -261,7 +287,7 @@
 
     const remainingMs = (startedAt + TWO_DAYS_MS) - now;
     if (remainingMs <= 0) {
-      return { active: false, remainingText: "" };
+      return { active: false, remainingText: "", reason: "expired_48h" };
     }
 
     const remDays = Math.floor(remainingMs / (24 * 60 * 60 * 1000));
@@ -270,7 +296,7 @@
       ? `متبقي ${remDays} يوم و ${remHours} ساعة`
       : `متبقي ${Math.max(1, remHours)} ساعة`;
 
-    return { active: true, remainingText };
+    return { active: true, remainingText, reason: "trial_active" };
   }
 
   async function syncPermissionsFromCloud() {
@@ -282,7 +308,7 @@
     }
 
     try {
-      const snap = await db.collection("geodev_config").doc("tools_permissions").get();
+      const snap = await db.collection("geodev_config").doc("tools_permissions_v2").get();
       if (snap.exists && snap.data()) {
         const cloudData = snap.data();
         managedTools.forEach(t => {
@@ -310,7 +336,7 @@
     const db = getDb();
     if (db) {
       try {
-        await db.collection("geodev_config").doc("tools_permissions").set(
+        await db.collection("geodev_config").doc("tools_permissions_v2").set(
           {
             ...permissionsMap,
             updatedAt: Date.now()
@@ -328,25 +354,6 @@
         }
       }
     }
-  }
-
-  function upgradeExistingAdminDropdowns() {
-    const adminSec = document.getElementById("s-admin");
-    if (!adminSec) return;
-    const selects = adminSec.querySelectorAll("select");
-    selects.forEach(sel => {
-      if (sel.dataset.gdPlusUpgraded || sel.dataset.gdToolTierSelect) return;
-      const optsText = Array.from(sel.options).map(o => o.textContent.trim()).join("|");
-      if ((optsText.includes("مجاني") || optsText.includes("PRO")) && !optsText.includes("PLUS")) {
-        sel.dataset.gdPlusUpgraded = "1";
-        const plusOpt = document.createElement("option");
-        plusOpt.value = "plus";
-        plusOpt.textContent = "PLUS";
-        const proIdx = Array.from(sel.options).findIndex(o => o.textContent.includes("PRO"));
-        if (proIdx >= 0) sel.insertBefore(plusOpt, sel.options[proIdx]);
-        else sel.appendChild(plusOpt);
-      }
-    });
   }
 
   function findAdminToolsContainer() {
@@ -372,8 +379,6 @@
 
     isRendering = true;
     try {
-      upgradeExistingAdminDropdowns();
-
       let panel = existingPanel;
       if (!panel) {
         panel = document.createElement("div");
@@ -401,7 +406,7 @@
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
           <strong style="font-size:14.5px;color:#d97706;">التحكم في الأدوات والمحطات الحديثة (مجاني / PLUS / PRO / مقفول)</strong>
           <span id="gdCustomToolsSaveStatus" style="font-size:11.5px;font-weight:800;color:#64748b;">
-            الأدوات المدفوعة تمنح يومين (48 ساعة) تجربة مجانية تلقائياً
+            مقفول على المسجلين من 22 نوفمبر لورا • تجربة 48 ساعة من 23 نوفمبر
           </span>
         </div>
 
@@ -417,8 +422,8 @@
                 <select data-gd-tool-tier-select="${tool.id}"
                   style="min-width:135px;padding:7px 10px;border-radius:9px;border:1.5px solid ${tierColors[cur] || "#64748b"};background:var(--bg,#0f172a);color:${tierColors[cur] || "#fff"};font-weight:900;font-size:12.5px;cursor:pointer;font-family:inherit;">
                   <option value="free" ${cur === "free" ? "selected" : ""}>مجاني (مفتوحة)</option>
-                  <option value="plus" ${cur === "plus" ? "selected" : ""}>PLUS (بلس + يومين تجربة)</option>
-                  <option value="pro" ${cur === "pro" ? "selected" : ""}>PRO (برو + يومين تجربة)</option>
+                  <option value="plus" ${cur === "plus" ? "selected" : ""}>PLUS (بلس)</option>
+                  <option value="pro" ${cur === "pro" ? "selected" : ""}>PRO (برو)</option>
                   <option value="locked" ${cur === "locked" ? "selected" : ""}>مقفول (مخفي)</option>
                 </select>
               </div>
@@ -441,6 +446,11 @@
 
   function enforceToolPermissions(forceRefresh = false) {
     injectRewatchTutorialButton();
+
+    // الزائر قبل تسجيل الدخول يبقى في وضع المعاينة الخاص بمحطة الإكسيل
+    if (!currentUid) return;
+
+    const displayName = currentUserName || resolveUserDisplayName(null);
 
     managedTools.forEach(tool => {
       const reqTier = permissionsMap[tool.id] || tool.defaultTier;
@@ -465,7 +475,7 @@
         }
 
         const trial = getOrStartToolTrial(tool.id);
-        const stateSig = `${reqTier}_${trial.active ? "trial2d" : "expired2d"}_${userTier}`;
+        const stateSig = `${reqTier}_${trial.active ? "trial2d" : "locked"}_${userTier}_${displayName}`;
         if (!forceRefresh && el.dataset.gdAppliedTier === stateSig) return;
         el.dataset.gdAppliedTier = stateSig;
 
@@ -492,12 +502,12 @@
 
           banner.innerHTML = `
             <div>
-              <strong style="color:#fbbf24;">معاك يومين تجربة مجانية لاستخدام هذه الأداة (${trial.remainingText})</strong>
+              <strong style="color:#fbbf24;">أهلاً ${displayName} — معاك يومين تجربة مجانية (${trial.remainingText})</strong>
               <div style="font-size:11.5px;color:#e7e5e4;margin-top:2px;">
-                استمتع بكافة المميزات مجاناً الآن — بعد انتهاء اليومين تتطلب الأداة الاشتراك في <b>${badgeName}</b>.
+                استمتع بكافة المميزات مجاناً الآن — بعد انتهاء الفترة التجريبية تتطلب الأداة الاشتراك في <b>${badgeName}</b>.
               </div>
             </div>
-            <a href="https://wa.me/201015912371?text=${encodeURIComponent("مرحباً م. أحمد، أريد الاشتراك في " + badgeName + " على منصة GeoDev")}"
+            <a href="https://wa.me/201015912371?text=${encodeURIComponent("مرحباً م. أحمد، أنا " + displayName + " (" + currentUserEmail + ") وأريد الاشتراك في " + badgeName + " على منصة GeoDev")}"
                target="_blank" rel="noopener noreferrer"
                style="padding:7px 13px;border-radius:9px;background:#e09f24;color:#141210;font-weight:900;font-size:12px;text-decoration:none;white-space:nowrap;">
               ترقية الحساب الآن
@@ -506,38 +516,46 @@
         } else {
           if (existingBanner) existingBanner.remove();
           el.style.position = "relative";
+          el.style.minHeight = "270px";
 
-          if (!existingOverlay) {
-            const overlay = document.createElement("div");
-            overlay.id = lockId;
-            overlay.style.cssText = `
-              position: absolute; inset: 0; z-index: 50;
-              background: rgba(15, 23, 42, 0.94); backdrop-filter: blur(6px);
-              border-radius: inherit; display: flex; flex-direction: column;
-              align-items: center; justify-content: center; text-align: center;
-              padding: 20px; color: #f8fafc;
-            `;
-            overlay.innerHTML = `
-              <div style="width:48px;height:48px;border-radius:14px;background:rgba(224,159,36,0.16);border:1.5px solid #e09f24;display:grid;place-items:center;color:#fbbf24;font-weight:900;font-size:18px;margin-bottom:10px;">
-                PRO
-              </div>
-              <div style="font-size:12.5px;font-weight:900;color:#f87171;margin-bottom:4px;">
-                انتهت فترة اليومين التجريبية المجانية
-              </div>
-              <h4 style="margin:0 0 8px;font-size:16.5px;font-weight:900;color:#fbbf24;">
-                أداة «${tool.name}» متاحة لمشتركي ${badgeName}
-              </h4>
-              <p style="margin:0 0 14px;font-size:12.5px;color:#cbd5e1;max-width:370px;line-height:1.7;">
-                لقد استنفدت فترة التجربة المجانية (يومين). قم بترقية حسابك إلى <b>${badgeName}</b> للاستمرار في استخدام هذه الأداة وجميع أدوات المكتب الفني.
-              </p>
-              <a href="https://wa.me/201015912371?text=${encodeURIComponent("مرحباً م. أحمد، انتهت فترة التجربة وأريد تفعيل " + badgeName + " على منصة GeoDev")}"
+          if (existingOverlay) existingOverlay.remove();
+
+          const overlay = document.createElement("div");
+          overlay.id = lockId;
+          overlay.style.cssText = `
+            position: absolute; inset: 0; z-index: 50;
+            background: rgba(15, 14, 12, 0.95); backdrop-filter: blur(7px);
+            border-radius: inherit; border: 2px solid #e09f24;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center; text-align: center;
+            padding: 22px 16px; color: #f5f5f4;
+          `;
+          overlay.innerHTML = `
+            <div style="display:inline-block;background:rgba(224,159,36,0.16);border:1.5px solid #e09f24;color:#fbbf24;font-size:12px;font-weight:900;padding:4px 14px;border-radius:999px;margin-bottom:10px;">
+              الحساب: ${displayName}
+            </div>
+            <div style="font-size:13px;font-weight:900;color:#f87171;margin-bottom:5px;">
+              انتهت الفترة التجريبية المجانية لحسابك
+            </div>
+            <h4 style="margin:0 0 8px;font-size:17px;font-weight:900;color:#fbbf24;">
+              أداة «${tool.name}» متاحة لمشتركي ${badgeName}
+            </h4>
+            <p style="margin:0 0 16px;font-size:13px;color:#d6d3d1;max-width:390px;line-height:1.7;">
+              مرحباً <b>${displayName}</b>، للاستمرار في استخدام هذه الأداة وجميع أدوات المكتب الفني والمساحة، يرجى تفعيل اشتراكك في <b>${badgeName}</b> الآن:
+            </p>
+            <div style="display:flex;flex-wrap:wrap;gap:9px;justify-content:center;">
+              <a href="https://wa.me/201015912371?text=${encodeURIComponent("مرحباً م. أحمد، أنا " + displayName + " (" + currentUserEmail + ") وأريد تفعيل اشتراك " + badgeName + " على منصة GeoDev")}"
                  target="_blank" rel="noopener noreferrer"
-                 style="padding:11px 20px;border-radius:11px;background:linear-gradient(135deg,#e09f24,#b45309);color:#141210;font-weight:900;font-size:13.5px;text-decoration:none;">
-                تفعيل ${badgeName} الآن
+                 style="padding:11px 22px;border-radius:11px;background:linear-gradient(135deg,#e09f24,#b45309);color:#141210;font-weight:900;font-size:13.5px;text-decoration:none;">
+                تفعيل ${badgeName} عبر واتساب
               </a>
-            `;
-            el.appendChild(overlay);
-          }
+              <button type="button" onclick="if(typeof showPro==='function')showPro('lock');"
+                style="padding:11px 16px;border-radius:11px;border:1.5px solid #e09f24;background:#292524;color:#fbbf24;font-weight:900;font-size:13px;cursor:pointer;font-family:inherit;">
+                إدخال كود تفعيل
+              </button>
+            </div>
+          `;
+          el.appendChild(overlay);
         }
       });
     });
@@ -545,13 +563,23 @@
 
   async function detectCurrentUserTier(user) {
     currentUid = user ? user.uid : null;
+    currentUserEmail = (user && user.email) || sessionStorage.getItem("gd_email") || "";
 
     if (!user) {
       userTier = "free";
+      userCreatedAtMs = 0;
+      currentUserName = "";
       enforceToolPermissions(true);
       setTimeout(() => openToolTutorialModal(false), 600);
       return;
     }
+
+    const authCreationMs = user.metadata && user.metadata.creationTime
+      ? parseTimestampMs(user.metadata.creationTime)
+      : 0;
+
+    userCreatedAtMs = authCreationMs;
+    currentUserName = resolveUserDisplayName(user);
 
     await syncTrialsFromCloud(user.uid);
 
@@ -561,6 +589,13 @@
         const snap = await db.collection("users").doc(user.uid).get();
         const data = snap.exists ? snap.data() : {};
 
+        currentUserName = resolveUserDisplayName(user, data);
+
+        const docCreatedMs = parseTimestampMs(data.created || data.createdAt || data.registeredAt);
+        if (docCreatedMs > 0) {
+          userCreatedAtMs = userCreatedAtMs > 0 ? Math.min(userCreatedAtMs, docCreatedMs) : docCreatedMs;
+        }
+
         if (data.excelTutorialSeenV1 === true) {
           localStorage.setItem(getTutorialStorageKey(), "1");
         }
@@ -569,7 +604,7 @@
           userTier = "admin";
         } else {
           const plan = String(data.plan || data.tier || data.subscription || "").toLowerCase();
-          const proUntil = Number(data.pro_until || data.proUntil || 0);
+          const proUntil = parseTimestampMs(data.pro_until || data.proUntil);
           const now = Date.now();
 
           if ((plan.includes("pro") || data.isPro === true) && (!proUntil || proUntil > now)) {
@@ -607,9 +642,8 @@
         clearTimeout(debounceTimer);
         debounceTimer = setTimeout(() => {
           renderAdminCustomToolsPanel(false);
-          enforceToolPermissions(false);
-          // فتح فيديو الشرح تلقائياً عند الانتقال لقسم المساحة إذا لم يشاهده المستخدم بعد
-          const survSec = document.getElementById("s-surv") || document.getElementById("s-surveying");
+          enforceToolPermissions(true);
+          const survSec = document.getElementById("s-survey") || document.getElementById("s-surv");
           if (survSec && survSec.offsetParent !== null) {
             openToolTutorialModal(false);
           }
@@ -624,7 +658,6 @@
     setTimeout(() => {
       renderAdminCustomToolsPanel(false);
       enforceToolPermissions(true);
-      openToolTutorialModal(false);
     }, 550);
 
     const checkFb = setInterval(() => {
