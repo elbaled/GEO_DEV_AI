@@ -2960,7 +2960,7 @@ try{renderSurveyGrid();refreshUI()}catch(e){console.warn(e)}
 </style>
 <script id="gd-v31-js">
 /* ===== GeoDev v3.1 — تحكم كامل + عداد اشتراك + ملف شخصي ===== */
-const ALLOW_TRIAL=false;   // false = PRO للمشتركين بكود فقط (بدون تجربة مجانية)
+const ALLOW_TRIAL=true;   // false = PRO للمشتركين بكود فقط (بدون تجربة مجانية)
 const REG=[
 ['أدوات المساحة',[['t:shapes','حاسبة الأشكال'],['t:triangle','المثلثات'],['t:convert','تحويل الوحدات'],['t:calc','جمع وطرح'],['t:map','الخريطة والرفع'],['t:coord','تحويل الإحداثيات'],['t:compass','البوصلة'],['t:qibla','القبلة'],['t:vol','الكميات والحفر'],['t:lvl','المناسيب'],['t:crv','المنحنيات'],['t:trv','تصحيح المضلع']]],
 ['الأقسام',[['s:studio','البرمجة'],['s:survey','المساحة'],['s:gis','الجيوماتكس'],['s:py','المختبر']]],
@@ -2992,7 +2992,31 @@ W('pickEng',(o,k)=>off('e:'+k)?closed():o(k));
 W('renderEng',o=>{o();document.querySelectorAll('#engBar .eng').forEach(b=>{const m=(b.getAttribute('onclick')||'').match(/pickEng\('(\w+)'\)/);if(m&&off('e:'+m[1]))b.style.display='none'})});
 Object.entries({gisSend:'gis_chat',askGis:'gis_chat',runPy:'lab',buildSite:'studio'}).forEach(([n,f])=>W(n,(o,...a)=>off('f:'+f)?closed():o(...a)));
 /* PRO للمشتركين بكود فقط (بدون تجربة) */
-W('proLeft',o=>{if(isAdm())return 1e12;if(ALLOW_TRIAL)return o();const m=typeof me=='function'?me():null;return m?(m.proUntil||0)-Date.now():o()});
+W('proLeft', o => {
+  if (isAdm()) return 1e12;
+  const m = typeof me === 'function' ? me() : null;
+  if (m && m.proUntil > Date.now()) return m.proUntil - Date.now();
+  if (!ALLOW_TRIAL) return 0;
+
+  const CUTOFF = new Date("2026-11-23T00:00:00+02:00").getTime();
+  const TWO_DAYS = 2 * 864e5;
+  let created = m && m.created ? Number(m.created) : 0;
+
+  try {
+    const u = firebase.auth().currentUser;
+    if (u && u.metadata && u.metadata.creationTime) {
+      const authCreated = Date.parse(u.metadata.creationTime);
+      if (!isNaN(authCreated)) created = created ? Math.min(created, authCreated) : authCreated;
+    }
+  } catch (e) {}
+
+  if (created > 0) {
+    if (created < CUTOFF) return 0; // الحسابات من 22 نوفمبر لورا مقفولة فوراً
+    return (created + TWO_DAYS) - Date.now(); // الحسابات الجديدة من 23 نوفمبر تأخذ يومين كاملين
+  }
+
+  return Math.min(o(), TWO_DAYS);
+});
 /* لوحة تحكم الأدمن */
 $('adminPanel').firstElementChild.insertAdjacentHTML('afterend',`<div class="card" id="gdCtl"><h3>التحكم في الأدوات والأقسام</h3><p class="mt">لكل عنصر ثلاث حالات: مجاني لجميع المستخدمين، أو PRO للمشتركين فقط، أو مقفول (مخفي عن المستخدمين).</p>${REG.map(([g,l])=>`<b>${g}</b>`+l.map(([i,n])=>`<div class="ctl-row"><label>${n}</label><select data-ctl="${i}">${[['free','مجاني'],['pro','PRO'],['off','مقفول']].map(([v,t])=>`<option value="${v}" ${st(i)==v?'selected':''}>${t}</option>`).join('')}</select></div>`).join('')).join('')}<button class="g" style="width:100%;margin-top:8px" onclick="saveCtl()">حفظ ونشر لجميع المستخدمين</button><div id="ctlMsg" class="mt" style="margin-top:6px"></div></div>`);
 window.saveCtl=async()=>{const n={};document.querySelectorAll('[data-ctl]').forEach(s=>{if(s.value!=(DEF_PRO.includes(s.dataset.ctl)?'pro':'free'))n[s.dataset.ctl]=s.value});CFG=n;localStorage.setItem('gd_ctl',JSON.stringify(n));applyCfg();
