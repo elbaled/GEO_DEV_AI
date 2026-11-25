@@ -436,13 +436,24 @@
     }
   }
 
-  function hasDirectSubscriptionAccess(requiredTier) {
+    function hasDirectSubscriptionAccess(requiredTier) {
     if (userTier === "admin") return true;
     if (requiredTier === "free") return true;
+
+    // التحقق المباشر من حالة PRO المفعّلة في المنصة والسيرفر (أكواد التفعيل + لوحة الإدارة)
+    try {
+      if (typeof window.isPro === "function" && window.isPro()) return true;
+      if (typeof window.me === "function") {
+        const m = window.me();
+        if (m && Number(m.proUntil || 0) > Date.now()) return true;
+      }
+    } catch (_) {}
+
     if (requiredTier === "plus") return userTier === "plus" || userTier === "pro";
     if (requiredTier === "pro") return userTier === "pro";
     return false;
   }
+
 
   function enforceToolPermissions(forceRefresh = false) {
     injectRewatchTutorialButton();
@@ -569,6 +580,19 @@
       userTier = "free";
       userCreatedAtMs = 0;
       currentUserName = "";
+           // مزامنة حالة PRO إذا تم التفعيل عبر كود اشتراك أو لوحة الإدارة في Worker
+    try {
+      if (typeof window.isPro === "function" && window.isPro() && userTier === "free") {
+        userTier = "pro";
+      }
+      if (typeof window.me === "function") {
+        const m = window.me();
+        if (m && Number(m.proUntil || 0) > Date.now()) {
+          userTier = "pro";
+        }
+      }
+    } catch (_) {}
+
       enforceToolPermissions(true);
       setTimeout(() => openToolTutorialModal(false), 600);
       return;
