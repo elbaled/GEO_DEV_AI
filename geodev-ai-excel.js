@@ -822,14 +822,16 @@
         border: 1px solid rgba(255, 255, 255, 0.25);
         /* من الأعلى (أعلى منسوب = بني غامق) إلى الأسفل (أقل منسوب = أزرق غامق) */
         background: linear-gradient(
-          to bottom,
-          #4a1d06 0%,
-          #b45309 20%,
-          #eac435 42%,
-          #22a86e 64%,
-          #1d70b8 82%,
-          #0f2b6b 100%
-        );
+  to bottom,
+  #3b1c0a 0%,
+  #854d0e 22%,
+  #a18a2a 44%,
+  #1e6b52 66%,
+  #1d4ed8 84%,
+  #0f1f4b 100%
+);
+opacity: 0.82;
+
       }
       .gd-elev-ticks {
         flex: 1;
