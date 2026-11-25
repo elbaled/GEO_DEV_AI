@@ -1,16 +1,16 @@
-
 /* ============================================================================
-   GeoDev Survey & GIS Excel Workstation (V6.2 ENTERPRISE - Accurate Code Engine + As-Built & Report)
+   GeoDev Survey & GIS Excel Workstation (V6.3 ENTERPRISE - Elevation Hypsometric Map + As-Built & Report)
    - إصلاح فصل نقاط الأرض الطبيعية (EG) عن نقاط المطابق (MNH) حتى لو كان عمود Type يحتوي على SAN
    - تصدير Civil 3D بدون BOM (PENZD / PENZ / PNEZD / PEN)
    - مركز تصدير متكامل + 3 سمات + دعم AutoCAD DXF/DWG و Sokkia STR/SDR و ArcGIS Pro
+   - خريطة المناسيب الملونة بالتدريج (أزرق غامق للأقل -> بني غامق للأعلى) + مفتاح ألوان بجانب الرسمة
    - مقارنة نقاط التصميم (Design) بالرفع التنفيذي الجديد (As-Built) وحساب الإزاحات بالمليمتر
    - تصدير التقرير المساحي الرسمي (PDF / Excel) ببيانات المشروع ونوع الأعمال وتاريخ الرفع واسم المساح وحد السماحية
    ============================================================================ */
 (function () {
   "use strict";
-  if (window.GeoDevAIExcelV62Init) return;
-  window.GeoDevAIExcelV62Init = true;
+  if (window.GeoDevAIExcelV63Init) return;
+  window.GeoDevAIExcelV63Init = true;
 
   function ensureSheetJS(callback) {
     if (window.XLSX) {
@@ -44,6 +44,7 @@
   let currentTheme = localStorage.getItem("gd_excel_theme_v6") || "dark_gold";
   let crsMode = "UTM36N";
   let showLabelsOnCanvas = true;
+  let elevationColorMode = true; // تفعيل تلوين المناسيب بالتدريج (أزرق غامق للأقل -> بني غامق للأعلى)
   let connectMode = "BY_CODE";
   let searchFilter = "";
   let isLoggedInUser = false;
@@ -67,6 +68,36 @@
       }
     } catch (_) {}
     return isLoggedInUser;
+  }
+
+  /* ============================================================================
+     دالة التدرج اللوني للمناسيب (أقل منسوب = أزرق غامق -> أعلى منسوب = بني غامق)
+     ============================================================================ */
+  const ELEVATION_STOPS = [
+    { t: 0.00, r: 15,  g: 43,  b: 107 }, // أزرق غامق جداً (أقل منسوب) #0f2b6b
+    { t: 0.22, r: 29,  g: 112, b: 184 }, // أزرق متوسط
+    { t: 0.42, r: 34,  g: 168, b: 110 }, // أخضر مائل للتركواز
+    { t: 0.62, r: 234, g: 196, b: 53  }, // أصفر رملي
+    { t: 0.82, r: 180, g: 83,  b: 9   }, // برتقالي محروق / بني فاتح
+    { t: 1.00, r: 74,  g: 29,  b: 6   }  // بني غامق (أعلى منسوب) #4a1d06
+  ];
+
+  function getElevationColor(zVal, minZ, maxZ) {
+    if (isNaN(zVal) || maxZ <= minZ) return "rgb(29, 112, 184)";
+    const t = Math.max(0, Math.min(1, (zVal - minZ) / (maxZ - minZ)));
+
+    for (let i = 0; i < ELEVATION_STOPS.length - 1; i++) {
+      const s0 = ELEVATION_STOPS[i];
+      const s1 = ELEVATION_STOPS[i + 1];
+      if (t >= s0.t && t <= s1.t) {
+        const localT = (t - s0.t) / Math.max(1e-6, s1.t - s0.t);
+        const r = Math.round(s0.r + (s1.r - s0.r) * localT);
+        const g = Math.round(s0.g + (s1.g - s0.g) * localT);
+        const b = Math.round(s0.b + (s1.b - s0.b) * localT);
+        return `rgb(${r}, ${g}, ${b})`;
+      }
+    }
+    return "rgb(74, 29, 6)";
   }
 
   /* ============================================================================
@@ -199,10 +230,8 @@
       const actC = String(actRow[cKey] || "").trim();
       if (isNaN(actE) || isNaN(actN)) return;
 
-      // 1. المطابقة برقم/اسم النقطة أولاً
       let matchedDesign = designRows.find(d => String(d.P || "").trim().toLowerCase() === actP.toLowerCase());
 
-      // 2. إذا اختلفت أرقام النقاط أثناء الرفع، نطابق بأقرب نقطة مكانياً
       if (!matchedDesign) {
         let minDist = Infinity;
         designRows.forEach(d => {
@@ -718,6 +747,7 @@
         direction: ltr;
       }
 
+      /* لوحة الرسم + مفتاح تدرج ألوان المناسيب بجانبها */
       .gd-ex-canvas-box {
         background: #06080d;
         border: 1.5px solid var(--ex-border);
@@ -736,17 +766,96 @@
         color: #38bdf8;
         font-weight: 800;
       }
+      .gd-cad-stage-layout {
+        display: flex;
+        gap: 8px;
+        align-items: stretch;
+        height: 320px;
+      }
       .gd-ex-canvas-wrapper {
         position: relative;
-        width: 100%;
-        height: 310px;
+        flex: 1;
+        min-width: 0;
+        height: 100%;
         border-radius: 10px;
         overflow: hidden;
         touch-action: none;
         cursor: grab;
+        border: 1px solid #1e293b;
       }
       .gd-ex-canvas-wrapper:active { cursor: grabbing; }
       #gdExcelCadCanvas { width: 100%; height: 100%; display: block; background: #04060a; }
+
+      /* مفتاح ألوان المناسيب المتدرج بجانب الرسمة */
+      .gd-elev-legend-panel {
+        width: 96px;
+        flex-shrink: 0;
+        background: #0b111e;
+        border: 1px solid #1e293b;
+        border-radius: 10px;
+        padding: 8px 6px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        color: #f1f5f9;
+        font-size: 10px;
+      }
+      .gd-elev-legend-title {
+        text-align: center;
+        font-weight: 900;
+        color: #fbbf24;
+        font-size: 10.5px;
+        border-bottom: 1px solid #1e293b;
+        padding-bottom: 4px;
+        margin-bottom: 5px;
+      }
+      .gd-elev-legend-body {
+        flex: 1;
+        display: flex;
+        align-items: stretch;
+        gap: 6px;
+        min-height: 0;
+      }
+      .gd-elev-gradient-bar {
+        width: 15px;
+        border-radius: 6px;
+        border: 1px solid rgba(255, 255, 255, 0.25);
+        /* من الأعلى (أعلى منسوب = بني غامق) إلى الأسفل (أقل منسوب = أزرق غامق) */
+        background: linear-gradient(
+          to bottom,
+          #4a1d06 0%,
+          #b45309 20%,
+          #eac435 42%,
+          #22a86e 64%,
+          #1d70b8 82%,
+          #0f2b6b 100%
+        );
+      }
+      .gd-elev-ticks {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        font-family: monospace;
+        font-size: 10px;
+        font-weight: 800;
+        direction: ltr;
+        text-align: left;
+      }
+      .gd-elev-tick-max { color: #f59e0b; }
+      .gd-elev-tick-mid { color: #cbd5e1; }
+      .gd-elev-tick-min { color: #38bdf8; }
+      .gd-elev-delta-badge {
+        margin-top: 5px;
+        padding-top: 4px;
+        border-top: 1px solid #1e293b;
+        text-align: center;
+        font-size: 9.5px;
+        color: #34d399;
+        font-weight: 900;
+        direction: ltr;
+      }
+
       .gd-cad-zoom-controls {
         position: absolute;
         bottom: 10px;
@@ -870,7 +979,7 @@
             </svg>
             <span id="gdThemeBulbLabel">${getThemeLabel(currentTheme)}</span>
           </button>
-          <span class="gd-ex-pro-pill">${logged ? "ENTERPRISE V6.2" : "وضع المعاينة"}</span>
+          <span class="gd-ex-pro-pill">${logged ? "ENTERPRISE V6.3" : "وضع المعاينة"}</span>
         </div>
       </div>
 
@@ -890,8 +999,8 @@
         </div>
         <div id="gdExcelAiLog">
           ${logged
-            ? "النظام جاهز: يتم فصل مطابق MNH الصافية عن نقاط الأرض الطبيعية EG تلقائياً."
-            : "وضع المعاينة للزوار: يمكنك رفع الملفات ومعاينة النقاط على لوحة الكاد مجاناً. سجّل الدخول لتفعيل الحفظ والتصدير."}
+            ? "النظام جاهز: تلوين المناسيب مفعّل (الأزرق الغامق لأقل منسوب والبني الغامق لأعلى منسوب) مع مفتاح التدرج."
+            : "وضع المعاينة للزوار: يمكنك رفع الملفات ومعاينة خريطة المناسيب على لوحة الكاد مجاناً. سجّل الدخول لتفعيل الحفظ والتصدير."}
         </div>
       </div>
 
@@ -978,9 +1087,12 @@
 
       <div class="gd-ex-canvas-box">
         <div class="gd-ex-canvas-head">
-          <span>معاينة CAD بالرموز الهندسية (مطابق MNH • إنارة LP • أرض طبيعية EG • أشجار TREE • ترحيل As-Built)</span>
+          <span>معاينة CAD وتدرج المناسيب (أقل منسوب: أزرق غامق ◄► أعلى منسوب: بني غامق)</span>
           <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
-            <input type="text" id="gdExSearchInput" class="gd-ex-input" style="max-width:110px;padding:4px 8px;font-size:11px;" placeholder="بحث...">
+            <input type="text" id="gdExSearchInput" class="gd-ex-input" style="max-width:100px;padding:4px 8px;font-size:11px;" placeholder="بحث...">
+            <button type="button" class="gd-ex-btn" style="padding:4px 8px;font-size:11px;${elevationColorMode ? "border-color:#fbbf24;color:#fbbf24;" : ""}" id="gdToggleElevColorBtn">
+              تدرج المناسيب: ${elevationColorMode ? "مفعّل" : "أكواد"}
+            </button>
             <button type="button" class="gd-ex-btn" style="padding:4px 8px;font-size:11px;" id="gdToggleLabelsBtn">النصوص</button>
             <button type="button" class="gd-ex-btn" style="padding:4px 8px;font-size:11px;" id="gdCycleConnectBtn">التوصيل: حسب الكود</button>
             <select id="gdCrsSelect" class="gd-ex-btn" style="padding:4px 8px;font-size:11px;">
@@ -990,12 +1102,31 @@
             </select>
           </div>
         </div>
-        <div class="gd-ex-canvas-wrapper" id="gdCadCanvasWrapper">
-          <canvas id="gdExcelCadCanvas"></canvas>
-          <div class="gd-cad-zoom-controls">
-            <button type="button" class="gd-cad-zbtn" id="gdCadZoomInBtn">+ تقريب</button>
-            <button type="button" class="gd-cad-zbtn" id="gdCadZoomOutBtn">- تبعيد</button>
-            <button type="button" class="gd-cad-zbtn" id="gdCadZoomResetBtn">توسيط الكل</button>
+
+        <div class="gd-cad-stage-layout">
+          <div class="gd-ex-canvas-wrapper" id="gdCadCanvasWrapper">
+            <canvas id="gdExcelCadCanvas"></canvas>
+            <div class="gd-cad-zoom-controls">
+              <button type="button" class="gd-cad-zbtn" id="gdCadZoomInBtn">+ تقريب</button>
+              <button type="button" class="gd-cad-zbtn" id="gdCadZoomOutBtn">- تبعيد</button>
+              <button type="button" class="gd-cad-zbtn" id="gdCadZoomResetBtn">توسيط الكل</button>
+            </div>
+          </div>
+
+          <!-- مفتاح الألوان المتدرج بجانب الرسمة من الأقل للأكبر -->
+          <div class="gd-elev-legend-panel" id="gdElevationLegendPanel">
+            <div class="gd-elev-legend-title">مفتاح المناسيب</div>
+            <div class="gd-elev-legend-body">
+              <div class="gd-elev-gradient-bar" title="تدرج الألوان من أقل منسوب (أزرق غامق) إلى أعلى منسوب (بني غامق)"></div>
+              <div class="gd-elev-ticks" id="gdElevationLegendTicks">
+                <span class="gd-elev-tick-max">--</span>
+                <span class="gd-elev-tick-mid">--</span>
+                <span class="gd-elev-tick-mid">--</span>
+                <span class="gd-elev-tick-mid">--</span>
+                <span class="gd-elev-tick-min">--</span>
+              </div>
+            </div>
+            <div class="gd-elev-delta-badge" id="gdElevationDeltaBadge">ΔZ: --</div>
           </div>
         </div>
       </div>
@@ -1308,9 +1439,9 @@
 
   <div class="stats">
     <div class="stat"><span>إجمالي النقاط</span><b>${st.count}</b></div>
+    <div class="stat"><span>أقل منسوب (Z)</span><b>${st.minZ}</b></div>
+    <div class="stat"><span>أعلى منسوب (Z)</span><b>${st.maxZ}</b></div>
     <div class="stat"><span>مطابق (MNH)</span><b>${st.sewerCount}</b></div>
-    <div class="stat"><span>أرض طبيعية (EG)</span><b>${st.nglCount}</b></div>
-    <div class="stat"><span>أعمدة إنارة (LP)</span><b>${st.lightCount}</b></div>
     ${hasComp ? `
       <div class="stat"><span>مطابق للسماحية</span><b style="color:#15803d;">${passed}</b></div>
       <div class="stat"><span>تجاوز السماحية</span><b style="color:#b91c1c;">${failed}</b></div>
@@ -1538,9 +1669,6 @@
     return found;
   }
 
-  /* ============================================================================
-     استيراد ملف نقاط التصميم (القديمة) للمقارنة مع الرفع الجديد
-     ============================================================================ */
   function handleDesignFileUpload(file) {
     if (!file) return;
     const ext = file.name.split(".").pop().toLowerCase();
@@ -1663,7 +1791,7 @@
             resetCadView();
             renderExcelTable();
             showExcelLog(
-              `تم استيراد ${rows.length} نقطة وتصنيفها بدقة: (${st.sewerCount} مطبق MNH صافي | ${st.nglCount} أرض طبيعية EG | ${st.lightCount} إنارة | ${st.treeCount} أشجار).`,
+              `تم استيراد ${rows.length} نقطة وتصنيفها وتلوين المناسيب من ${st.minZ}م إلى ${st.maxZ}م.`,
               "success"
             );
           } catch (err) {
@@ -2262,10 +2390,10 @@
     if (statsBar) {
       statsBar.innerHTML = `
         <div class="gd-ex-stat"><span>إجمالي النقاط</span><strong>${st.count}</strong></div>
+        <div class="gd-ex-stat"><span>أقل منسوب (Z)</span><strong style="color:#38bdf8;">${st.minZ}</strong></div>
+        <div class="gd-ex-stat"><span>أعلى منسوب (Z)</span><strong style="color:#f59e0b;">${st.maxZ}</strong></div>
         <div class="gd-ex-stat"><span>مطابق MNH صافي</span><strong style="color:#fb923c;">${st.sewerCount}</strong></div>
         <div class="gd-ex-stat"><span>أرض طبيعية (EG)</span><strong style="color:#10b981;">${st.nglCount}</strong></div>
-        <div class="gd-ex-stat"><span>أعمدة إنارة (LP)</span><strong style="color:#eab308;">${st.lightCount}</strong></div>
-        <div class="gd-ex-stat"><span>أشجار (TREE)</span><strong style="color:#22c55e;">${st.treeCount}</strong></div>
         <div class="gd-ex-stat"><span>المساحة المغلقة</span><strong>${st.areaM2.toFixed(1)} م²</strong></div>
         ${hasComp ? `<div class="gd-ex-stat" style="border-color:${failedCount ? "#ef4444" : "#22c55e"};"><span>تفاوت As-Built</span><strong style="color:${failedCount ? "#ef4444" : "#22c55e"};">${failedCount ? failedCount + " تجاوز" : "مطابق"}</strong></div>` : ""}
       `;
@@ -2287,6 +2415,10 @@
     }
 
     const filtered = getFilteredRowsWithIndex();
+    const { zKey } = getCoordKeys();
+    const allZ = rows.map(r => parseFloat(r[zKey])).filter(v => !isNaN(v));
+    const minZ = allZ.length ? Math.min(...allZ) : 0;
+    const maxZ = allZ.length ? Math.max(...allZ) : 0;
 
     table.innerHTML = `
       <thead>
@@ -2301,19 +2433,28 @@
       <tbody>
         ${filtered.map(({ r, originalIdx, cls }) => {
           const comp = hasComp ? asBuiltResults.find(c => c.rowIdx === originalIdx) : null;
+          const zVal = parseFloat(r[zKey]);
+          const zBadgeColor = !isNaN(zVal) ? getElevationColor(zVal, minZ, maxZ) : "transparent";
+
           return `
             <tr>
               <td style="background:var(--ex-th-bg);color:var(--ex-muted);font-weight:800;padding:6px 8px;">${originalIdx + 1}</td>
               <td style="padding:5px 8px;white-space:nowrap;font-size:11px;font-weight:900;color:${cls.color};">
                 ${cls.labelAr}
               </td>
-              ${columns.map(col => `
-                <td>
-                  <input type="text" class="gd-ex-cell"
-                    data-row="${originalIdx}" data-col="${col}"
-                    value="${String(r[col] ?? "").replace(/"/g, "&quot;")}">
-                </td>
-              `).join("")}
+              ${columns.map(col => {
+                const isZCol = col === zKey;
+                const cellExtraStyle = isZCol && !isNaN(zVal)
+                  ? `border-right:4px solid ${zBadgeColor};`
+                  : "";
+                return `
+                  <td>
+                    <input type="text" class="gd-ex-cell" style="${cellExtraStyle}"
+                      data-row="${originalIdx}" data-col="${col}"
+                      value="${String(r[col] ?? "").replace(/"/g, "&quot;")}">
+                  </td>
+                `;
+              }).join("")}
               ${hasComp ? `
                 <td style="padding:5px 8px;white-space:nowrap;font-size:11.5px;font-weight:900;color:${comp && comp.isPass ? "#22c55e" : "#ef4444"};">
                   ${comp ? `${comp.dXY_mm.toFixed(1)} مم` : "-"}
@@ -2330,6 +2471,37 @@
     `;
   }
 
+  /* ============================================================================
+     تحديث مفتاح ألوان المناسيب بجانب الرسمة من الأقل للأكبر
+     ============================================================================ */
+  function updateElevationLegend(minZ, maxZ) {
+    const ticksBox = document.getElementById("gdElevationLegendTicks");
+    const deltaBox = document.getElementById("gdElevationDeltaBadge");
+    if (!ticksBox || !deltaBox) return;
+
+    if (!isFinite(minZ) || !isFinite(maxZ)) {
+      ticksBox.innerHTML = `<span class="gd-elev-tick-max">--</span><span class="gd-elev-tick-min">--</span>`;
+      deltaBox.textContent = "ΔZ: --";
+      return;
+    }
+
+    const span = maxZ - minZ;
+    const v4 = maxZ;
+    const v3 = minZ + span * 0.75;
+    const v2 = minZ + span * 0.50;
+    const v1 = minZ + span * 0.25;
+    const v0 = minZ;
+
+    ticksBox.innerHTML = `
+      <span class="gd-elev-tick-max" title="أعلى منسوب (بني غامق)">${v4.toFixed(2)}</span>
+      <span class="gd-elev-tick-mid">${v3.toFixed(2)}</span>
+      <span class="gd-elev-tick-mid">${v2.toFixed(2)}</span>
+      <span class="gd-elev-tick-mid">${v1.toFixed(2)}</span>
+      <span class="gd-elev-tick-min" title="أقل منسوب (أزرق غامق)">${v0.toFixed(2)}</span>
+    `;
+    deltaBox.textContent = `ΔZ: ${span.toFixed(2)}m`;
+  }
+
   function drawCadPreview() {
     const canvas = document.getElementById("gdExcelCadCanvas");
     if (!canvas) return;
@@ -2337,7 +2509,7 @@
     const rect = canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
     const W = rect.width || 320;
-    const H = rect.height || 310;
+    const H = rect.height || 320;
 
     canvas.width = Math.max(300, W * dpr);
     canvas.height = Math.max(250, H * dpr);
@@ -2364,12 +2536,18 @@
       .filter(pt => !isNaN(pt.e) && !isNaN(pt.n));
 
     if (!pts.length) {
+      updateElevationLegend(NaN, NaN);
       ctx.fillStyle = "#64748b";
       ctx.font = "bold 13px sans-serif";
       ctx.textAlign = "center";
       ctx.fillText("لا توجد نقاط مطابقة للعرض حالياً", W / 2, H / 2);
       return;
     }
+
+    const zValues = pts.map(p => p.z).filter(v => !isNaN(v));
+    const minZ = zValues.length ? Math.min(...zValues) : 0;
+    const maxZ = zValues.length ? Math.max(...zValues) : 0;
+    updateElevationLegend(minZ, maxZ);
 
     const allE = [...pts.map(p => p.e), ...designRows.map(d => d.E)];
     const allN = [...pts.map(p => p.n), ...designRows.map(d => d.N)];
@@ -2393,6 +2571,23 @@
       y: centerY - (n - midN) * scale
     });
 
+    // رسم هالات المناسيب الحرارية المتدرجة في الخلفية عند تفعيل وضع تدرج المناسيب
+    if (elevationColorMode && zValues.length > 0) {
+      pts.forEach(pt => {
+        if (isNaN(pt.z)) return;
+        const c = toCanvas(pt.e, pt.n);
+        const col = getElevationColor(pt.z, minZ, maxZ);
+        const radius = Math.max(16, Math.min(44, 24 * Math.sqrt(cadZoom)));
+        const grad = ctx.createRadialGradient(c.x, c.y, 1, c.x, c.y, radius);
+        grad.addColorStop(0, col.replace("rgb(", "rgba(").replace(")", ", 0.55)"));
+        grad.addColorStop(1, col.replace("rgb(", "rgba(").replace(")", ", 0.0)"));
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(c.x, c.y, radius, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
     // رسم نقاط التصميم وأسهم الترحيل (As-Built vs Design)
     if (asBuiltResults.length) {
       asBuiltResults.forEach(c => {
@@ -2415,15 +2610,16 @@
     }
 
     if (connectMode === "SEQUENTIAL" && pts.length >= 2) {
-      ctx.beginPath();
-      ctx.strokeStyle = "#38bdf8";
-      ctx.lineWidth = 1.4;
-      pts.forEach((pt, idx) => {
-        const c = toCanvas(pt.e, pt.n);
-        if (idx === 0) ctx.moveTo(c.x, c.y);
-        else ctx.lineTo(c.x, c.y);
-      });
-      ctx.stroke();
+      for (let i = 0; i < pts.length - 1; i++) {
+        const c1 = toCanvas(pts[i].e, pts[i].n);
+        const c2 = toCanvas(pts[i + 1].e, pts[i + 1].n);
+        ctx.beginPath();
+        ctx.strokeStyle = elevationColorMode ? getElevationColor(pts[i].z, minZ, maxZ) : "#38bdf8";
+        ctx.lineWidth = 1.6;
+        ctx.moveTo(c1.x, c1.y);
+        ctx.lineTo(c2.x, c2.y);
+        ctx.stroke();
+      }
     } else if (connectMode === "BY_CODE") {
       const groups = {};
       pts.forEach(pt => {
@@ -2433,15 +2629,16 @@
       });
       Object.values(groups).forEach(gPts => {
         if (gPts.length < 2) return;
-        ctx.beginPath();
-        ctx.strokeStyle = gPts[0].cls.color;
-        ctx.lineWidth = 1.5;
-        gPts.forEach((pt, idx) => {
-          const c = toCanvas(pt.e, pt.n);
-          if (idx === 0) ctx.moveTo(c.x, c.y);
-          else ctx.lineTo(c.x, c.y);
-        });
-        ctx.stroke();
+        for (let i = 0; i < gPts.length - 1; i++) {
+          const c1 = toCanvas(gPts[i].e, gPts[i].n);
+          const c2 = toCanvas(gPts[i + 1].e, gPts[i + 1].n);
+          ctx.beginPath();
+          ctx.strokeStyle = elevationColorMode ? getElevationColor(gPts[i].z, minZ, maxZ) : gPts[0].cls.color;
+          ctx.lineWidth = 1.6;
+          ctx.moveTo(c1.x, c1.y);
+          ctx.lineTo(c2.x, c2.y);
+          ctx.stroke();
+        }
       });
     }
 
@@ -2456,20 +2653,24 @@
     const allowText = showLabelsOnCanvas && (visiblePts.length <= 80 || cadZoom >= 2.2);
 
     visiblePts.forEach(pt => {
-      ctx.strokeStyle = pt.cls.color;
-      ctx.fillStyle = pt.cls.color;
-      ctx.lineWidth = 1.6;
+      const ptColor = elevationColorMode && !isNaN(pt.z)
+        ? getElevationColor(pt.z, minZ, maxZ)
+        : pt.cls.color;
+
+      ctx.strokeStyle = ptColor;
+      ctx.fillStyle = ptColor;
+      ctx.lineWidth = 1.8;
 
       if (pt.cls.symbol === "MANHOLE") {
         ctx.beginPath();
         ctx.arc(pt.cx, pt.cy, 5.5, 0, Math.PI * 2);
         ctx.stroke();
         ctx.beginPath();
-        ctx.arc(pt.cx, pt.cy, 2.2, 0, Math.PI * 2);
+        ctx.arc(pt.cx, pt.cy, 2.5, 0, Math.PI * 2);
         ctx.fill();
       } else if (pt.cls.symbol === "LIGHT") {
         ctx.beginPath();
-        ctx.arc(pt.cx, pt.cy, 4, 0, Math.PI * 2);
+        ctx.arc(pt.cx, pt.cy, 4.2, 0, Math.PI * 2);
         ctx.fill();
         ctx.beginPath();
         ctx.moveTo(pt.cx - 7, pt.cy); ctx.lineTo(pt.cx + 7, pt.cy);
@@ -2492,7 +2693,7 @@
         ctx.stroke();
       } else {
         ctx.beginPath();
-        ctx.arc(pt.cx, pt.cy, 3.2, 0, Math.PI * 2);
+        ctx.arc(pt.cx, pt.cy, 3.8, 0, Math.PI * 2);
         ctx.fill();
       }
 
@@ -2596,7 +2797,7 @@
       const q = String(chatInput.value || "").trim();
       if (!q) return;
 
-      if (/(اكسيل|إكسيل|excel|penz|penzd|civil\s*3d|sdr|str|توتال|اعمدة\s*انارة|أعمدة\s*إنارة|صرف\s*صحي|mnh|تحويل\s*نقاط)/i.test(q)) {
+      if (/(اكسيل|إكسيل|excel|penz|penzd|civil\s*3d|sdr|str|توتال|اعمدة\s*انارة|أعمدة\s*إنارة|صرف\s*صحي|mnh|تحويل\s*نقاط|مناسيب)/i.test(q)) {
         setTimeout(() => {
           const chatBox =
             document.getElementById("chatBox") ||
@@ -2616,7 +2817,7 @@
               توجيه من مساعد GeoDev الهندسي
             </strong>
             <p style="margin:0 0 10px;font-size:12.5px;color:#e7e5e4;line-height:1.65;">
-              لإنشاء أو تعديل ملفات الإكسيل المساحية (<b>PENZD / PENZ</b>) وتصنيف نقاط أعمدة الإنارة والصرف الصحي <b>MNH</b> والتصدير المباشر لـ <b>Civil 3D</b> و <b>AutoCAD</b>، يرجى التوجه إلى <b>قسم المساحة — محطة إكسيل المساحة</b>:
+              لإنشاء أو تعديل ملفات الإكسيل المساحية (<b>PENZD / PENZ</b>) ومعاينة تدرج المناسيب الملون ومقارنة التصميم بالرفع والتصدير لـ <b>Civil 3D</b> و <b>AutoCAD</b>، يرجى التوجه إلى <b>قسم المساحة — محطة إكسيل المساحة</b>:
             </p>
             <button type="button" id="gdJumpToSurvExcelBtn"
               style="padding:9px 15px;border-radius:9px;border:0;background:linear-gradient(135deg,#e09f24,#b45309);color:#141210;font-weight:900;font-size:12.5px;cursor:pointer;font-family:inherit;">
@@ -2724,6 +2925,19 @@
 
   function bindEvents() {
     document.addEventListener("click", e => {
+      // زر تبديل تلوين المناسيب المتدرج
+      const elevBtn = e.target.closest("#gdToggleElevColorBtn");
+      if (elevBtn) {
+        elevationColorMode = !elevationColorMode;
+        elevBtn.textContent = `تدرج المناسيب: ${elevationColorMode ? "مفعّل" : "أكواد"}`;
+        elevBtn.style.borderColor = elevationColorMode ? "#fbbf24" : "";
+        elevBtn.style.color = elevationColorMode ? "#fbbf24" : "";
+        const legend = document.getElementById("gdElevationLegendPanel");
+        if (legend) legend.style.opacity = elevationColorMode ? "1" : "0.45";
+        drawCadPreview();
+        return;
+      }
+
       // فتح نافذة تصدير التقرير الرسمي
       if (e.target.closest("#gdOpenOfficialReportBtn") || e.target.closest("#gdExportReportHubBtn")) {
         openOfficialReportModal();
