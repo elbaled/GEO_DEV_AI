@@ -1,13 +1,14 @@
 /* ============================================================================
-   GeoDev Admin Tools, Cutoff Trial & Tutorial Video Gate (V1.5)
+   GeoDev Admin Tools, Cutoff Trial & Tutorial Video Gate (V1.6)
    - يقفل الأداة فوراً على الحسابات المسجلة من يوم 22 نوفمبر 2026 فما أقدم
    - يمنح الحسابات المسجلة من 23 نوفمبر 2026 فترة تجربة يومين (48 ساعة) فقط
+   - يفتح الأدوات فوراً لأي حساب مفعّل له باقة PRO أو PLUS عبر الأكواد أو لوحة الإدارة
    - يعرض شاشة الاشتراك باسم المستخدم + نافذة فيديو شرح استخدام الأداة
    ============================================================================ */
 (function () {
   "use strict";
-  if (window.GeoDevAdminToolsCtrlV15Init) return;
-  window.GeoDevAdminToolsCtrlV15Init = true;
+  if (window.GeoDevAdminToolsCtrlV16Init) return;
+  window.GeoDevAdminToolsCtrlV16Init = true;
 
   const ADMIN_EMAIL = "eng.ahmedsamir.gis@gmail.com";
   const STORAGE_KEY = "gd_custom_tools_permissions_v2";
@@ -97,6 +98,24 @@
 
   function isLegacyBeforeNov23() {
     return userCreatedAtMs > 0 && userCreatedAtMs < CUTOFF_NOV_23_MS;
+  }
+
+  function checkPlatformProStatus() {
+    try {
+      if (sessionStorage.getItem("gd_role") === "admin") return true;
+      if (typeof window.isPro === "function" && window.isPro()) return true;
+      if (typeof window.me === "function") {
+        const m = window.me();
+        if (m && Number(m.proUntil || 0) > Date.now()) return true;
+      }
+      const em = (currentUserEmail || sessionStorage.getItem("gd_email") || "").toLowerCase();
+      if (em) {
+        const list = JSON.parse(localStorage.getItem("gd_users") || "[]");
+        const found = list.find(u => String(u.email || "").toLowerCase() === em);
+        if (found && Number(found.proUntil || 0) > Date.now()) return true;
+      }
+    } catch (_) {}
+    return false;
   }
 
   /* ============================================================================
@@ -436,24 +455,20 @@
     }
   }
 
-    function hasDirectSubscriptionAccess(requiredTier) {
+  function hasDirectSubscriptionAccess(requiredTier) {
     if (userTier === "admin") return true;
     if (requiredTier === "free") return true;
 
     // التحقق المباشر من حالة PRO المفعّلة في المنصة والسيرفر (أكواد التفعيل + لوحة الإدارة)
-    try {
-      if (typeof window.isPro === "function" && window.isPro()) return true;
-      if (typeof window.me === "function") {
-        const m = window.me();
-        if (m && Number(m.proUntil || 0) > Date.now()) return true;
-      }
-    } catch (_) {}
+    if (checkPlatformProStatus()) {
+      userTier = "pro";
+      return true;
+    }
 
     if (requiredTier === "plus") return userTier === "plus" || userTier === "pro";
     if (requiredTier === "pro") return userTier === "pro";
     return false;
   }
-
 
   function enforceToolPermissions(forceRefresh = false) {
     injectRewatchTutorialButton();
@@ -580,19 +595,6 @@
       userTier = "free";
       userCreatedAtMs = 0;
       currentUserName = "";
-           // مزامنة حالة PRO إذا تم التفعيل عبر كود اشتراك أو لوحة الإدارة في Worker
-    try {
-      if (typeof window.isPro === "function" && window.isPro() && userTier === "free") {
-        userTier = "pro";
-      }
-      if (typeof window.me === "function") {
-        const m = window.me();
-        if (m && Number(m.proUntil || 0) > Date.now()) {
-          userTier = "pro";
-        }
-      }
-    } catch (_) {}
-
       enforceToolPermissions(true);
       setTimeout(() => openToolTutorialModal(false), 600);
       return;
@@ -646,6 +648,11 @@
       userTier = user.email && user.email.toLowerCase() === ADMIN_EMAIL ? "admin" : "free";
     }
 
+    // مزامنة حالة PRO المفعّلة عبر كود اشتراك أو لوحة الإدارة في Worker
+    if (userTier !== "admin" && checkPlatformProStatus()) {
+      userTier = "pro";
+    }
+
     enforceToolPermissions(true);
     setTimeout(() => openToolTutorialModal(false), 650);
   }
@@ -695,6 +702,17 @@
       }
     }, 500);
     setTimeout(() => clearInterval(checkFb), 12000);
+
+    // إعادة التحقق من حالة PRO بعد استلام بيانات الاشتراك من السيرفر أو عند تفعيل كود
+    let syncAttempts = 0;
+    const proSyncTimer = setInterval(() => {
+      syncAttempts++;
+      if (currentUid && userTier === "free" && checkPlatformProStatus()) {
+        userTier = "pro";
+        enforceToolPermissions(true);
+      }
+      if (syncAttempts >= 15) clearInterval(proSyncTimer);
+    }, 1000);
   }
 
   if (document.readyState === "loading") {
@@ -702,6 +720,7 @@
   } else {
     init();
   }
+
   // تقليص أي فترة تجريبية قادمة من السيرفر إلى يومين (48 ساعة) من تاريخ التسجيل
   const _origMe = window.me;
   if (typeof _origMe === "function") {
@@ -714,5 +733,4 @@
       return u;
     };
   }
-
 })();
