@@ -2515,9 +2515,9 @@
     canvas.height = Math.max(250, H * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    ctx.fillStyle = "#04060a";
+    ctx.fillStyle = "#080c12";
     ctx.fillRect(0, 0, W, H);
-    ctx.strokeStyle = "rgba(56, 189, 248, 0.08)";
+    ctx.strokeStyle = "rgba(148, 163, 184, 0.06)";
     ctx.lineWidth = 1;
     for (let x = 0; x < W; x += 28) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
     for (let y = 0; y < H; y += 28) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
@@ -2571,35 +2571,56 @@
       y: centerY - (n - midN) * scale
     });
 
-    // رسم هالات المناسيب الحرارية المتدرجة في الخلفية عند تفعيل وضع تدرج المناسيب
+    // 1. تظليل كنتوري خافت جداً للمناسيب (بدون توهج فاقع)
     if (elevationColorMode && zValues.length > 0) {
       pts.forEach(pt => {
         if (isNaN(pt.z)) return;
         const c = toCanvas(pt.e, pt.n);
         const col = getElevationColor(pt.z, minZ, maxZ);
-        const radius = Math.max(16, Math.min(44, 24 * Math.sqrt(cadZoom)));
+        const radius = Math.max(12, Math.min(26, 16 * Math.sqrt(cadZoom)));
         const grad = ctx.createRadialGradient(c.x, c.y, 1, c.x, c.y, radius);
-        grad.addColorStop(0, col.replace("rgb(", "rgba(").replace(")", ", 0.55)"));
+        grad.addColorStop(0, col.replace("rgb(", "rgba(").replace(")", ", 0.18)"));
         grad.addColorStop(1, col.replace("rgb(", "rgba(").replace(")", ", 0.0)"));
         ctx.fillStyle = grad;
         ctx.beginPath();
         ctx.arc(c.x, c.y, radius, 0, Math.PI * 2);
         ctx.fill();
       });
+
+      // رسم خطوط كنتورية خافتة بين النقاط المتقاربة في المنسوب
+      if (pts.length >= 3 && maxZ > minZ) {
+        const levels = 6;
+        for (let lv = 1; lv < levels; lv++) {
+          const targetZ = minZ + ((maxZ - minZ) * lv) / levels;
+          const bandPts = pts.filter(p => !isNaN(p.z) && Math.abs(p.z - targetZ) <= (maxZ - minZ) / (levels * 1.4));
+          if (bandPts.length >= 2) {
+            const col = getElevationColor(targetZ, minZ, maxZ).replace("rgb(", "rgba(").replace(")", ", 0.55)");
+            ctx.strokeStyle = col;
+            ctx.lineWidth = 1.2;
+            ctx.beginPath();
+            bandPts.forEach((bp, i) => {
+              const sc = toCanvas(bp.e, bp.n);
+              if (i === 0) ctx.moveTo(sc.x, sc.y);
+              else ctx.lineTo(sc.x, sc.y);
+            });
+            ctx.stroke();
+          }
+        }
+      }
     }
 
-    // رسم نقاط التصميم وأسهم الترحيل (As-Built vs Design)
+    // 2. رسم نقاط التصميم وأسهم الترحيل (As-Built vs Design)
     if (asBuiltResults.length) {
       asBuiltResults.forEach(c => {
         const pDes = toCanvas(c.desE, c.desN);
         const pAct = toCanvas(c.actE, c.actN);
 
-        ctx.strokeStyle = "#38bdf8";
-        ctx.lineWidth = 1.5;
-        ctx.strokeRect(pDes.x - 4.5, pDes.y - 4.5, 9, 9);
+        ctx.strokeStyle = "rgba(56, 189, 248, 0.75)";
+        ctx.lineWidth = 1.3;
+        ctx.strokeRect(pDes.x - 4, pDes.y - 4, 8, 8);
 
-        ctx.strokeStyle = c.isPass ? "#22c55e" : "#ef4444";
-        ctx.lineWidth = 1.6;
+        ctx.strokeStyle = c.isPass ? "rgba(34, 197, 94, 0.85)" : "rgba(239, 68, 68, 0.85)";
+        ctx.lineWidth = 1.4;
         ctx.setLineDash([4, 3]);
         ctx.beginPath();
         ctx.moveTo(pDes.x, pDes.y);
@@ -2609,13 +2630,16 @@
       });
     }
 
+    // 3. خطوط الربط الهندسية
     if (connectMode === "SEQUENTIAL" && pts.length >= 2) {
       for (let i = 0; i < pts.length - 1; i++) {
         const c1 = toCanvas(pts[i].e, pts[i].n);
         const c2 = toCanvas(pts[i + 1].e, pts[i + 1].n);
         ctx.beginPath();
-        ctx.strokeStyle = elevationColorMode ? getElevationColor(pts[i].z, minZ, maxZ) : "#38bdf8";
-        ctx.lineWidth = 1.6;
+        ctx.strokeStyle = elevationColorMode
+          ? getElevationColor(pts[i].z, minZ, maxZ).replace("rgb(", "rgba(").replace(")", ", 0.65)")
+          : "rgba(56, 189, 248, 0.65)";
+        ctx.lineWidth = 1.2;
         ctx.moveTo(c1.x, c1.y);
         ctx.lineTo(c2.x, c2.y);
         ctx.stroke();
@@ -2633,8 +2657,10 @@
           const c1 = toCanvas(gPts[i].e, gPts[i].n);
           const c2 = toCanvas(gPts[i + 1].e, gPts[i + 1].n);
           ctx.beginPath();
-          ctx.strokeStyle = elevationColorMode ? getElevationColor(gPts[i].z, minZ, maxZ) : gPts[0].cls.color;
-          ctx.lineWidth = 1.6;
+          ctx.strokeStyle = elevationColorMode
+            ? getElevationColor(gPts[i].z, minZ, maxZ).replace("rgb(", "rgba(").replace(")", ", 0.65)")
+            : gPts[0].cls.color;
+          ctx.lineWidth = 1.3;
           ctx.moveTo(c1.x, c1.y);
           ctx.lineTo(c2.x, c2.y);
           ctx.stroke();
@@ -2652,64 +2678,63 @@
 
     const allowText = showLabelsOnCanvas && (visiblePts.length <= 80 || cadZoom >= 2.2);
 
+    // 4. رسم رموز النقاط بألوان هادئة واضحة
     visiblePts.forEach(pt => {
-      const ptColor = elevationColorMode && !isNaN(pt.z)
+      const baseCol = elevationColorMode && !isNaN(pt.z)
         ? getElevationColor(pt.z, minZ, maxZ)
         : pt.cls.color;
 
-      ctx.strokeStyle = ptColor;
-      ctx.fillStyle = ptColor;
-      ctx.lineWidth = 1.8;
+      ctx.strokeStyle = baseCol;
+      ctx.fillStyle = baseCol;
+      ctx.lineWidth = 1.5;
 
       if (pt.cls.symbol === "MANHOLE") {
-        ctx.beginPath();
-        ctx.arc(pt.cx, pt.cy, 5.5, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(pt.cx, pt.cy, 2.5, 0, Math.PI * 2);
-        ctx.fill();
-      } else if (pt.cls.symbol === "LIGHT") {
-        ctx.beginPath();
-        ctx.arc(pt.cx, pt.cy, 4.2, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.moveTo(pt.cx - 7, pt.cy); ctx.lineTo(pt.cx + 7, pt.cy);
-        ctx.moveTo(pt.cx, pt.cy - 7); ctx.lineTo(pt.cx, pt.cy + 7);
-        ctx.stroke();
-      } else if (pt.cls.symbol === "TREE") {
         ctx.beginPath();
         ctx.arc(pt.cx, pt.cy, 5, 0, Math.PI * 2);
         ctx.stroke();
         ctx.beginPath();
-        ctx.moveTo(pt.cx - 3.5, pt.cy - 3.5); ctx.lineTo(pt.cx + 3.5, pt.cy + 3.5);
-        ctx.moveTo(pt.cx + 3.5, pt.cy - 3.5); ctx.lineTo(pt.cx - 3.5, pt.cy + 3.5);
+        ctx.arc(pt.cx, pt.cy, 2, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (pt.cls.symbol === "LIGHT") {
+        ctx.beginPath();
+        ctx.arc(pt.cx, pt.cy, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(pt.cx - 6, pt.cy); ctx.lineTo(pt.cx + 6, pt.cy);
+        ctx.moveTo(pt.cx, pt.cy - 6); ctx.lineTo(pt.cx, pt.cy + 6);
+        ctx.stroke();
+      } else if (pt.cls.symbol === "TREE") {
+        ctx.beginPath();
+        ctx.arc(pt.cx, pt.cy, 4.5, 0, Math.PI * 2);
         ctx.stroke();
       } else if (pt.cls.symbol === "TRIANGLE") {
         ctx.beginPath();
-        ctx.moveTo(pt.cx, pt.cy - 6);
-        ctx.lineTo(pt.cx - 5.5, pt.cy + 4.5);
-        ctx.lineTo(pt.cx + 5.5, pt.cy + 4.5);
+        ctx.moveTo(pt.cx, pt.cy - 5.5);
+        ctx.lineTo(pt.cx - 5, pt.cy + 4);
+        ctx.lineTo(pt.cx + 5, pt.cy + 4);
         ctx.closePath();
         ctx.stroke();
       } else {
+        // علامة (×) المساحية الهادئة لنقاط الأرض الطبيعية
         ctx.beginPath();
-        ctx.arc(pt.cx, pt.cy, 3.8, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.moveTo(pt.cx - 3.5, pt.cy - 3.5); ctx.lineTo(pt.cx + 3.5, pt.cy + 3.5);
+        ctx.moveTo(pt.cx + 3.5, pt.cy - 3.5); ctx.lineTo(pt.cx - 3.5, pt.cy + 3.5);
+        ctx.stroke();
       }
 
       if (allowText) {
-        ctx.fillStyle = "#f8fafc";
-        ctx.font = "bold 10.5px sans-serif";
+        ctx.fillStyle = "rgba(226, 232, 240, 0.85)";
+        ctx.font = "600 10px sans-serif";
         ctx.textAlign = "left";
-        const zTxt = !isNaN(pt.z) ? ` Z=${pt.z.toFixed(2)}` : "";
-        const cTxt = pt.c ? ` [${pt.c}]` : "";
-        ctx.fillText(`${pt.p}${cTxt}${zTxt}`, pt.cx + 7, pt.cy - 4);
+        const zTxt = !isNaN(pt.z) ? ` ${pt.z.toFixed(2)}` : "";
+        const cTxt = pt.c ? `[${pt.c}]` : "";
+        ctx.fillText(`${pt.p} ${cTxt}${zTxt}`, pt.cx + 6, pt.cy - 3);
       }
     });
 
-    ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
+    ctx.fillStyle = "rgba(15, 23, 42, 0.78)";
     ctx.fillRect(W - 115, 8, 107, 22);
-    ctx.fillStyle = "#38bdf8";
+    ctx.fillStyle = "#94a3b8";
     ctx.font = "bold 11px sans-serif";
     ctx.textAlign = "center";
     ctx.fillText(`Zoom: ${cadZoom.toFixed(1)}x`, W - 61, 23);
