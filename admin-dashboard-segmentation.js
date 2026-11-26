@@ -1263,4 +1263,218 @@
   } else {
     init();
   }
+/* ============================================================================
+   إرسال إشعارات اشتراك PRO للحسابات بدون اشتراك نشط (جماعي وفردي)
+   ============================================================================ */
+(function () {
+  "use strict";
+  if (window.GeoDevProNotifySegmentInit) return;
+  window.GeoDevProNotifySegmentInit = true;
+
+  const DEFAULT_TITLE = "عرض تفعيل باقة PRO في GeoDev Studio Pro";
+  const DEFAULT_BODY =
+    "انتهت الفترة التجريبية لحسابك — اشترك الآن في باقة PRO واستفد من خصم 20% للطلاب والخريجين لتفعيل محطة إكسيل المساحة وجميع الأدوات الهندسية.";
+
+  async function dispatchProNotification(targetEmails, customTitle, customBody) {
+    const cleanEmails = [...new Set((targetEmails || []).map(e => String(e || "").trim().toLowerCase()).filter(Boolean))];
+    if (!cleanEmails.length) {
+      if (typeof toast === "function") toast("لا توجد حسابات مستهدفة للإرسال", "warn");
+      return;
+    }
+
+    let sentCount = 0;
+
+    // 1. الحفظ في قاعدة بيانات الإشعارات (Firestore) ليظهر داخل المنصة فور فتح الحساب
+    try {
+      if (window.firebase && firebase.apps && firebase.apps.length) {
+        const db = firebase.firestore();
+        const now = Date.now();
+        const batchSize = 400;
+
+        for (let i = 0; i < cleanEmails.length; i += batchSize) {
+          const batch = db.batch();
+          const slice = cleanEmails.slice(i, i + batchSize);
+          slice.forEach(email => {
+            const ref = db.collection("notifications").doc();
+            batch.set(ref, {
+              toEmail: email,
+              target: email,
+              title: customTitle,
+              body: customBody,
+              message: customBody,
+              type: "pro_offer",
+              actionUrl: "https://wa.me/201015912371",
+              read: false,
+              createdAt: now
+            });
+          });
+          await batch.commit();
+          sentCount += slice.length;
+        }
+      }
+    } catch (err) {
+      console.warn("Firestore notification batch error:", err);
+    }
+
+    // 2. الإرسال عبر خادم المنصة / جسر الإشعارات (Push / OneSignal) إذا كان متاحاً
+    try {
+      if (typeof window.geoApi === "function") {
+        await window.geoApi("/admin/notify", {
+          method: "POST",
+          body: {
+            emails: cleanEmails,
+            title: customTitle,
+            body: customBody,
+            type: "pro_offer"
+          }
+        }).catch(() => {});
+      }
+    } catch (_) {}
+
+    if (typeof toast === "function") {
+      toast(`تم إرسال إشعار اشتراك PRO إلى ${sentCount || cleanEmails.length} حساب بنجاح`, "success");
+    }
+  }
+
+  function openSendProNotifyModal(targetEmails, labelText) {
+    const old = document.getElementById("gdProNotifyModal");
+    if (old) old.remove();
+
+    const overlay = document.createElement("div");
+    overlay.id = "gdProNotifyModal";
+    overlay.style.cssText = `
+      position: fixed; inset: 0; z-index: 999999;
+      background: rgba(10, 9, 8, 0.88); backdrop-filter: blur(6px);
+      display: flex; align-items: center; justify-content: center;
+      padding: 16px; direction: rtl; font-family: inherit;
+    `;
+
+    overlay.innerHTML = `
+      <div style="width:100%;max-width:440px;background:#1e1b18;border:2px solid #e09f24;border-radius:16px;padding:18px;color:#f5f5f4;box-shadow:0 20px 50px rgba(0,0,0,0.8);">
+        <div style="display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #38332e;padding-bottom:10px;margin-bottom:12px;">
+          <h3 style="margin:0;font-size:16px;font-weight:900;color:#fbbf24;">إرسال إشعار اشتراك PRO</h3>
+          <button type="button" id="gdCloseProNotifyModal" style="background:#292524;color:#d6d3d1;border:1px solid #44403c;border-radius:8px;padding:4px 9px;cursor:pointer;">✕</button>
+        </div>
+
+        <div style="font-size:12px;color:#38bdf8;font-weight:800;margin-bottom:10px;">
+          المستهدفون: ${labelText} (${targetEmails.length} حساب)
+        </div>
+
+        <label style="display:block;font-size:12px;font-weight:800;color:#fbbf24;margin-bottom:4px;">عنوان الإشعار:</label>
+        <input id="gdProNotifyTitleInput" type="text" value="${DEFAULT_TITLE}"
+          style="width:100%;padding:10px;border-radius:10px;border:1px solid #44403c;background:#141210;color:#fff;margin-bottom:10px;font-family:inherit;">
+
+        <label style="display:block;font-size:12px;font-weight:800;color:#fbbf24;margin-bottom:4px;">نص الإشعار:</label>
+        <textarea id="gdProNotifyBodyInput" rows="4"
+          style="width:100%;padding:10px;border-radius:10px;border:1px solid #44403c;background:#141210;color:#fff;margin-bottom:14px;font-family:inherit;">${DEFAULT_BODY}</textarea>
+
+        <div style="display:flex;gap:8px;">
+          <button type="button" id="gdConfirmSendProNotifyBtn"
+            style="flex:1;padding:11px;border-radius:10px;border:0;background:linear-gradient(135deg,#e09f24,#b45309);color:#141210;font-weight:900;font-size:13.5px;cursor:pointer;font-family:inherit;">
+            إرسال الإشعار الآن
+          </button>
+          <button type="button" id="gdCancelProNotifyBtn"
+            style="padding:11px 14px;border-radius:10px;border:1px solid #44403c;background:#292524;color:#a8a29e;font-weight:800;cursor:pointer;font-family:inherit;">
+            إلغاء
+          </button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    document.getElementById("gdCloseProNotifyModal").onclick = close;
+    document.getElementById("gdCancelProNotifyBtn").onclick = close;
+
+    document.getElementById("gdConfirmSendProNotifyBtn").onclick = async () => {
+      const title = document.getElementById("gdProNotifyTitleInput").value.trim() || DEFAULT_TITLE;
+      const body = document.getElementById("gdProNotifyBodyInput").value.trim() || DEFAULT_BODY;
+      close();
+      await dispatchProNotification(targetEmails, title, body);
+    };
+  }
+
+  function injectNotifyButtons() {
+    const adminSec = document.getElementById("s-admin");
+    if (!adminSec) return;
+
+    // 1. إضافة زر الإرسال الجماعي بجانب عنوان "حسابات بدون اشتراك نشط"
+    const headings = Array.from(adminSec.querySelectorAll("h2, h3, h4, strong, div"));
+    const inactiveHeader = headings.find(
+      el => el.children.length === 0 && (el.textContent || "").includes("حسابات بدون اشتراك نشط")
+    );
+
+    if (inactiveHeader && !document.getElementById("gdBulkNotifyInactiveProBtn")) {
+      const bulkBtn = document.createElement("button");
+      bulkBtn.type = "button";
+      bulkBtn.id = "gdBulkNotifyInactiveProBtn";
+      bulkBtn.style.cssText = `
+        display: block; width: 100%; margin: 10px 0 12px; padding: 11px 14px;
+        border-radius: 11px; border: 1.5px solid #fbbf24;
+        background: linear-gradient(135deg, #d97706, #92400e);
+        color: #ffffff; font-weight: 900; font-size: 13px; cursor: pointer; font-family: inherit;
+      `;
+      bulkBtn.textContent = "إرسال إشعار اشتراك PRO لجميع الحسابات غير المفعلة";
+
+      bulkBtn.onclick = async () => {
+        // جمع الإيميلات الظاهرة أو جلب جميع الحسابات بدون اشتراك نشط من Firestore / القائمة
+        const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+        const domEmails = (adminSec.innerText.match(emailRegex) || []).filter(
+          e => e.toLowerCase() !== "eng.ahmedsamir.gis@gmail.com"
+        );
+
+        let allInactiveEmails = [...domEmails];
+        try {
+          if (window.firebase && firebase.apps && firebase.apps.length) {
+            const snap = await firebase.firestore().collection("users").get();
+            const now = Date.now();
+            snap.forEach(doc => {
+              const d = doc.data() || {};
+              const em = String(d.email || "").trim().toLowerCase();
+              const proUntil = Number(d.proUntil || d.pro_until || 0);
+              if (em && em !== "eng.ahmedsamir.gis@gmail.com" && proUntil <= now) {
+                allInactiveEmails.push(em);
+              }
+            });
+          }
+        } catch (_) {}
+
+        allInactiveEmails = [...new Set(allInactiveEmails)];
+        openSendProNotifyModal(allInactiveEmails, "جميع الحسابات بدون اشتراك نشط");
+      };
+
+      inactiveHeader.insertAdjacentElement("afterend", bulkBtn);
+    }
+
+    // 2. إضافة زر "إشعار PRO" داخل كل كارت مستخدم منتهي
+    const cards = Array.from(adminSec.querySelectorAll("div")).filter(
+      el => (el.textContent || "").includes("تفعيل PRO") && (el.textContent || "").includes("إلغاء الكل") && el.querySelectorAll("button").length >= 3
+    );
+
+    cards.forEach(card => {
+      if (card.querySelector(".gd-single-pro-notify-btn")) return;
+      const emailMatch = (card.innerText || "").match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+      if (!emailMatch) return;
+      const userEmail = emailMatch[0].trim();
+
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "gd-single-pro-notify-btn";
+      btn.style.cssText = `
+        width: 100%; margin-top: 7px; padding: 8px 10px; border-radius: 9px;
+        border: 1px solid #e09f24; background: rgba(224, 159, 36, 0.14);
+        color: #d97706; font-weight: 900; font-size: 12px; cursor: pointer; font-family: inherit;
+      `;
+      btn.textContent = "إرسال إشعار اشتراك PRO لهذا الحساب";
+      btn.onclick = () => openSendProNotifyModal([userEmail], userEmail);
+
+      card.appendChild(btn);
+    });
+  }
+
+  const obs = new MutationObserver(() => injectNotifyButtons());
+  if (document.body) {
+    obs.observe(document.body, { childList: true, subtree: true });
+  }
+  setInterval(injectNotifyButtons, 1500);
 })();
