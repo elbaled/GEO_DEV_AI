@@ -1,14 +1,17 @@
 /* ============================================================================
-   GeoDev Android WebView & APK Bridge (V2.0 - Real Download + Custom Filename)
-   - يتيح تعديل اسم الملف قبل الحفظ (مثل Area_1 أو Road_2) مع تثبيت الامتداد (.xlsx / .csv / .dxf / .sdr / .kml)
-   - يتجاوز حظر WebView لروابط data: و blob: عبر توليد رابط تنزيل HTTP حقيقي يفتح في مدير التنزيلات
-   - يدعم المشاركة المباشرة في أندرويد (واتساب / Google Drive / مدير الملفات)
-   - زر تحديث فوري (Refresh) لكسر الكاش داخل التطبيق
+   GeoDev Direct Device File Saver & Permission Bridge (V3.0 - Zero External Links)
+   - بدون أي مواقع وسيطة أو روابط خارجية نهائياً
+   - يطلب إذن حفظ الملفات على ذاكرة الهاتف مباشرة عند فتح التطبيق (File System Access API)
+   - يتيح تعديل اسم الملف مع بقاء الصيغة ثابتة (.xlsx / .csv / .dxf / .sdr / .kml)
+   - يحفظ الملف مباشرة داخل الهاتف أو عبر قائمة حفظ أندرويد الأصلية
    ============================================================================ */
 (function () {
   "use strict";
-  if (window.GeoDevAndroidBridgeV2Init) return;
-  window.GeoDevAndroidBridgeV2Init = true;
+  if (window.GeoDevAndroidBridgeV3Init) return;
+  window.GeoDevAndroidBridgeV3Init = true;
+
+  const STORAGE_PERM_KEY = "gd_device_storage_perm_granted_v1";
+  let savedDirectoryHandle = null;
 
   function isAndroidAppWebView() {
     const ua = (navigator.userAgent || "").toLowerCase();
@@ -63,9 +66,7 @@
   function splitFilename(rawFilename) {
     const clean = String(rawFilename || `GeoDev_${Date.now()}.txt`).trim();
     const lastDot = clean.lastIndexOf(".");
-    if (lastDot <= 0) {
-      return { baseName: clean, ext: "txt" };
-    }
+    if (lastDot <= 0) return { baseName: clean, ext: "txt" };
     return {
       baseName: clean.slice(0, lastDot),
       ext: clean.slice(lastDot + 1).toLowerCase()
@@ -80,44 +81,163 @@
     return cleaned || fallback;
   }
 
-  // رفع مؤقت عبر خدمة نقل ملفات HTTP لتوليد رابط تنزيل حقيقي يقبله Android DownloadManager
-  async function uploadToTempHttpDownload(blob, finalFilename) {
-    const formData = new FormData();
-    formData.append("file", blob, finalFilename);
+  /* ============================================================================
+     1. رسالة طلب إذن حفظ الملفات على ذاكرة الهاتف فور فتح التطبيق
+     ============================================================================ */
+  function promptDeviceStoragePermissionOnStartup() {
+    if (!isAndroidAppWebView()) return;
+    if (localStorage.getItem(STORAGE_PERM_KEY) === "1") return;
+    if (document.getElementById("gdStoragePermDialog")) return;
 
-    // المحاولة الأولى: tmpfiles.org (يعطي رابط تنزيل مباشر حقيقي)
-    try {
-      const res = await fetch("https://tmpfiles.org/api/v1/upload", {
-        method: "POST",
-        body: formData
-      });
-      if (res.ok) {
-        const json = await res.json();
-        const pageUrl = json?.data?.url;
-        if (pageUrl) {
-          // تحويل رابط العرض إلى رابط تنزيل مباشر
-          return pageUrl.replace("https://tmpfiles.org/", "https://tmpfiles.org/dl/");
+    const modal = document.createElement("div");
+    modal.id = "gdStoragePermDialog";
+    modal.style.cssText = `
+      position: fixed; inset: 0; z-index: 999999;
+      background: rgba(10, 9, 8, 0.85); backdrop-filter: blur(6px);
+      display: flex; align-items: center; justify-content: center;
+      padding: 16px; direction: rtl; font-family: inherit;
+    `;
+
+    modal.innerHTML = `
+      <div style="width:100%;max-width:400px;background:#1e1b18;border:2px solid #e09f24;border-radius:18px;padding:20px;color:#f5f5f4;text-align:center;box-shadow:0 24px 60px rgba(0,0,0,0.85);">
+        <div style="width:48px;height:48px;margin:0 auto 10px;border-radius:14px;background:rgba(224,159,36,0.16);border:1.5px solid #e09f24;display:grid;place-items:center;color:#fbbf24;font-weight:900;font-size:18px;">
+          DIR
+        </div>
+        <h3 style="margin:0 0 8px;font-size:16.5px;font-weight:900;color:#fbbf24;">
+          السماح بحفظ الملفات في ذاكرة الهاتف
+        </h3>
+        <p style="margin:0 0 16px;font-size:13px;color:#d6d3d1;line-height:1.7;">
+          هل تريد السماح لتطبيق <b>GeoDev Studio Pro</b> بحفظ ملفات الإكسيل والأوتوكاد والتوتال ستيشن مباشرة داخل مجلدات هاتفك؟
+        </p>
+        <div style="display:flex;gap:9px;">
+          <button type="button" id="gdAllowDeviceStorageBtn"
+            style="flex:1;padding:12px;border-radius:11px;border:0;background:linear-gradient(135deg,#22c55e,#15803d);color:#fff;font-size:14px;font-weight:900;cursor:pointer;font-family:inherit;">
+            موافق (السماح بالحفظ)
+          </button>
+          <button type="button" id="gdDenyDeviceStorageBtn"
+            style="padding:12px 16px;border-radius:11px;border:1px solid #44403c;background:#292524;color:#a8a29e;font-size:13px;font-weight:800;cursor:pointer;font-family:inherit;">
+            لاحقاً
+          </button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    document.getElementById("gdAllowDeviceStorageBtn").onclick = async () => {
+      localStorage.setItem(STORAGE_PERM_KEY, "1");
+      modal.remove();
+      try {
+        if (typeof window.showDirectoryPicker === "function") {
+          savedDirectoryHandle = await window.showDirectoryPicker({ mode: "readwrite" });
         }
+      } catch (_) {}
+      if (typeof toast === "function") {
+        toast("تم تفعيل الحفظ المباشر على الهاتف بنجاح", "success");
       }
-    } catch (_) {}
+    };
 
-    // المحاولة الثانية: file.io
-    try {
-      const res2 = await fetch("https://file.io/?expires=1d", {
-        method: "POST",
-        body: formData
-      });
-      if (res2.ok) {
-        const json2 = await res2.json();
-        if (json2?.link) return json2.link;
-      }
-    } catch (_) {}
-
-    return null;
+    document.getElementById("gdDenyDeviceStorageBtn").onclick = () => {
+      localStorage.setItem(STORAGE_PERM_KEY, "1");
+      modal.remove();
+    };
   }
 
-  // نافذة تعديل اسم الملف + التنزيل الفعلي والمشاركة في تطبيق الأندرويد
-  async function handleWebViewFileExport(blob, rawFilename) {
+  /* ============================================================================
+     2. حفظ الملف مباشرة داخل الهاتف بدون مغادرة التطبيق أو فتح أي موقع خارجي
+     ============================================================================ */
+  async function saveBlobDirectlyToDevice(typedBlob, finalName, mime, statusBox) {
+    // المسار أ: الكتابة المباشرة في المجلد المصرح به على الهاتف (إذا كان مدعوماً)
+    if (savedDirectoryHandle) {
+      try {
+        const fileHandle = await savedDirectoryHandle.getFileHandle(finalName, { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write(typedBlob);
+        await writable.close();
+        statusBox.style.display = "block";
+        statusBox.style.borderColor = "#22c55e";
+        statusBox.style.color = "#4ade80";
+        statusBox.innerHTML = `تم حفظ الملف <b>${finalName}</b> مباشرة داخل مجلد الهاتف بنجاح.`;
+        return true;
+      } catch (_) {}
+    }
+
+    // المسار ب: نافذة "حفظ باسم" في نظام أندرويد (showSaveFilePicker)
+    if (typeof window.showSaveFilePicker === "function") {
+      try {
+        const { ext } = splitFilename(finalName);
+        const handle = await window.showSaveFilePicker({
+          suggestedName: finalName,
+          types: [{ description: "GeoDev Survey File", accept: { [mime]: ["." + ext] } }]
+        });
+        const writable = await handle.createWritable();
+        await writable.write(typedBlob);
+        await writable.close();
+        statusBox.style.display = "block";
+        statusBox.style.borderColor = "#22c55e";
+        statusBox.style.color = "#4ade80";
+        statusBox.innerHTML = `تم حفظ <b>${finalName}</b> في ذاكرة الهاتف بنجاح.`;
+        return true;
+      } catch (err) {
+        if (err && err.name === "AbortError") return true;
+      }
+    }
+
+    // المسار ج: واجهة تطبيق أندرويد المدمجة (إن وجدت في APK)
+    if (window.Android && typeof window.Android.saveFile === "function") {
+      try {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          window.Android.saveFile(reader.result, finalName, mime);
+        };
+        reader.readAsDataURL(typedBlob);
+        statusBox.style.display = "block";
+        statusBox.style.borderColor = "#22c55e";
+        statusBox.style.color = "#4ade80";
+        statusBox.innerHTML = `تم إرسال <b>${finalName}</b> إلى مجلد التنزيلات في الهاتف.`;
+        return true;
+      } catch (_) {}
+    }
+
+    // المسار د: قائمة الحفظ والمشاركة الأصلية في نظام أندرويد (Save to Files / Drive / WhatsApp)
+    const fileObj = new File([typedBlob], finalName, { type: mime });
+    if (navigator.canShare && navigator.canShare({ files: [fileObj] })) {
+      try {
+        await navigator.share({
+          files: [fileObj],
+          title: finalName
+        });
+        statusBox.style.display = "block";
+        statusBox.style.borderColor = "#22c55e";
+        statusBox.style.color = "#4ade80";
+        statusBox.innerHTML = `تم تجهيز <b>${finalName}</b> — اختر «حفظ في الملفات» أو التطبيق المطلوب.`;
+        return true;
+      } catch (err) {
+        if (err && err.name === "AbortError") return true;
+      }
+    }
+
+    // المسار هـ: التنزيل المحلي المباشر للمتصفح (blob:)
+    const localBlobUrl = origCreateObjectURL(typedBlob);
+    const a = document.createElement("a");
+    a.href = localBlobUrl;
+    a.download = finalName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(localBlobUrl), 3000);
+
+    statusBox.style.display = "block";
+    statusBox.style.borderColor = "#fbbf24";
+    statusBox.style.color = "#fbbf24";
+    statusBox.innerHTML = `تم طلب حفظ <b>${finalName}</b> محلياً على الجهاز.`;
+    return true;
+  }
+
+  /* ============================================================================
+     3. نافذة تعديل اسم الملف (مع تثبيت الصيغة) والحفظ المباشر على الهاتف
+     ============================================================================ */
+  function handleWebViewFileExport(blob, rawFilename) {
     const { baseName, ext } = splitFilename(rawFilename);
     const mime = blob.type || getMimeByExt(ext);
     const typedBlob = new Blob([blob], { type: mime });
@@ -138,12 +258,12 @@
       <div style="width:100%;max-width:430px;background:#1e1b18;border:2px solid #e09f24;border-radius:18px;padding:18px;color:#f5f5f4;text-align:right;box-shadow:0 24px 60px rgba(0,0,0,0.85);">
         <div style="text-align:center;margin-bottom:10px;">
           <span style="display:inline-block;background:rgba(34,197,94,0.16);border:1px solid #22c55e;color:#4ade80;font-size:11.5px;font-weight:900;padding:3px 12px;border-radius:999px;">
-            تجهيز الملف للحفظ والتنزيل
+            حفظ الملف مباشرة في الهاتف
           </span>
         </div>
 
         <label style="display:block;font-size:12.5px;font-weight:900;color:#fbbf24;margin-bottom:6px;">
-          اسم الملف (يمكنك تعديل الاسم مع بقاء الصيغة ثابتة):
+          اكتب اسم الملف (الصيغة ثابتة تلقائياً):
         </label>
 
         <div style="display:flex;align-items:stretch;direction:ltr;border:1.5px solid #e09f24;border-radius:11px;overflow:hidden;background:#141210;margin-bottom:12px;">
@@ -155,17 +275,12 @@
           </span>
         </div>
 
-        <div id="gdAndroidDownloadStatus" style="display:none;margin-bottom:10px;padding:8px 10px;border-radius:9px;background:rgba(56,189,248,0.14);border:1px solid #38bdf8;color:#38bdf8;font-size:12px;font-weight:800;text-align:center;"></div>
+        <div id="gdAndroidDownloadStatus" style="display:none;margin-bottom:10px;padding:9px 10px;border-radius:9px;background:rgba(34,197,94,0.14);border:1px solid #22c55e;color:#4ade80;font-size:12px;font-weight:800;text-align:center;"></div>
 
         <div style="display:flex;flex-direction:column;gap:9px;">
-          <button type="button" id="gdRealHttpDownloadBtn"
-            style="width:100%;padding:13px;border-radius:11px;border:0;background:linear-gradient(135deg,#e09f24,#b45309);color:#141210;font-size:14px;font-weight:900;cursor:pointer;font-family:inherit;">
-            تنزيل مباشر إلى مجلد Downloads
-          </button>
-
-          <button type="button" id="gdNativeShareFileBtn"
-            style="width:100%;padding:12px;border-radius:11px;border:0;background:linear-gradient(135deg,#22c55e,#15803d);color:#ffffff;font-size:13.5px;font-weight:900;cursor:pointer;font-family:inherit;">
-            حفظ في الهاتف أو مشاركة (واتساب / Drive / الملفات)
+          <button type="button" id="gdDirectSaveToPhoneBtn"
+            style="width:100%;padding:13px;border-radius:11px;border:0;background:linear-gradient(135deg,#22c55e,#15803d);color:#ffffff;font-size:14.5px;font-weight:900;cursor:pointer;font-family:inherit;">
+            حفظ في الهاتف مباشرة
           </button>
 
           <button type="button" id="gdCopyFileContentBtn"
@@ -191,70 +306,22 @@
       return `${safeBase}.${ext}`;
     };
 
-    // 1. زر التنزيل المباشر عبر رابط HTTP حقيقي (يعمل في Android WebView و DownloadManager)
-    document.getElementById("gdRealHttpDownloadBtn").onclick = async function () {
+    document.getElementById("gdDirectSaveToPhoneBtn").onclick = async function () {
       const finalName = getFinalFilename();
       this.disabled = true;
-      this.textContent = "جاري تجهيز رابط التنزيل المباشر...";
-      statusBox.style.display = "block";
-      statusBox.textContent = `جاري تحضير الملف (${finalName}) للتنزيل...`;
-
-      try {
-        const directUrl = await uploadToTempHttpDownload(typedBlob, finalName);
-        if (directUrl) {
-          statusBox.style.borderColor = "#22c55e";
-          statusBox.style.color = "#4ade80";
-          statusBox.innerHTML = `بدأ تنزيل <b>${finalName}</b> — إذا لم يبدأ تلقائياً <a href="${directUrl}" target="_blank" rel="noopener" style="color:#fbbf24;text-decoration:underline;">اضغط هنا للتحميل</a>`;
-
-          // تشغيل التنزيل عبر رابط HTTPS حقيقي يتعرف عليه نظام الأندرويد فوراً
-          const a = document.createElement("a");
-          a.href = directUrl;
-          a.download = finalName;
-          a.target = "_blank";
-          a.rel = "noopener";
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-        } else {
-          statusBox.style.borderColor = "#f59e0b";
-          statusBox.style.color = "#fbbf24";
-          statusBox.textContent = "تعذر الاتصال بخادم التنزيل، استخدم زر «حفظ في الهاتف أو مشاركة» بالأسفل.";
-        }
-      } catch (_) {
-        statusBox.textContent = "استخدم زر «حفظ في الهاتف أو مشاركة» بالأسفل لحفظ الملف مباشرة.";
-      } finally {
-        this.disabled = false;
-        this.textContent = "تنزيل مباشر إلى مجلد Downloads";
-      }
+      this.textContent = "جاري الحفظ في الهاتف...";
+      await saveBlobDirectlyToDevice(typedBlob, finalName, mime, statusBox);
+      this.disabled = false;
+      this.textContent = "حفظ في الهاتف مباشرة";
     };
 
-    // 2. زر المشاركة والحفظ في الهاتف (Android Share Sheet)
-    document.getElementById("gdNativeShareFileBtn").onclick = async () => {
-      const finalName = getFinalFilename();
-      const fileObj = new File([typedBlob], finalName, { type: mime });
-      try {
-        if (navigator.canShare && navigator.canShare({ files: [fileObj] })) {
-          await navigator.share({
-            files: [fileObj],
-            title: finalName,
-            text: `ملف ${finalName} من منصة GeoDev Studio Pro`
-          });
-          return;
-        }
-      } catch (_) {}
-
-      // بديل تلقائي إذا لم يدعم WebView مشاركة الملفات
-      document.getElementById("gdRealHttpDownloadBtn").click();
-    };
-
-    // 3. نسخ المحتوى النصي
     document.getElementById("gdCopyFileContentBtn").onclick = async () => {
       try {
         const txt = await typedBlob.text();
         await navigator.clipboard.writeText(txt);
         if (typeof toast === "function") toast("تم نسخ محتوى الملف بالكامل إلى الحافظة", "success");
       } catch (_) {
-        if (typeof toast === "function") toast("هذا الملف ثنائي (Excel/ZIP)، استخدم زر التنزيل المباشر", "warn");
+        if (typeof toast === "function") toast("هذا الملف ثنائي (Excel)، استخدم زر «حفظ في الهاتف مباشرة»", "warn");
       }
     };
 
@@ -288,7 +355,7 @@
     true
   );
 
-  // إضافة زر تحديث سريع (Refresh + مسح الكاش) في الهيدر العلوي لتطبيق الأندرويد
+  // زر تحديث سريع (Refresh + مسح الكاش) في الهيدر العلوي
   function injectAppRefreshButton() {
     const header = document.querySelector("header");
     if (!header || document.getElementById("gdAppForceRefreshBtn")) return;
@@ -357,6 +424,7 @@
   function init() {
     injectAppRefreshButton();
     patchSheetJSForAndroid();
+    setTimeout(promptDeviceStoragePermissionOnStartup, 1500);
   }
 
   if (document.readyState === "loading") {
