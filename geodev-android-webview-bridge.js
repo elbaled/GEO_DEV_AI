@@ -1,16 +1,15 @@
 /* ============================================================================
-   GeoDev Android WebView & APK Bridge (V1.0)
-   - يحل مشكلة عدم تنزيل/حفظ الملفات (CSV / DXF / SDR / STR / XLSX / KML) داخل تطبيق الأندرويد
-   - يوفر الحفظ المباشر ومشاركة الملفات عبر قائمة أندرويد الأصلية (WhatsApp / Drive / Files)
-   - يضيف زر تحديث فوري (Refresh) لكسر الكاش داخل التطبيق
-   - يحسن أداء WebView ويمنع الثقل أثناء معاينة نقاط الإكسيل
+   GeoDev Android WebView & APK Bridge (V2.0 - Real Download + Custom Filename)
+   - يتيح تعديل اسم الملف قبل الحفظ (مثل Area_1 أو Road_2) مع تثبيت الامتداد (.xlsx / .csv / .dxf / .sdr / .kml)
+   - يتجاوز حظر WebView لروابط data: و blob: عبر توليد رابط تنزيل HTTP حقيقي يفتح في مدير التنزيلات
+   - يدعم المشاركة المباشرة في أندرويد (واتساب / Google Drive / مدير الملفات)
+   - زر تحديث فوري (Refresh) لكسر الكاش داخل التطبيق
    ============================================================================ */
 (function () {
   "use strict";
-  if (window.GeoDevAndroidBridgeV1Init) return;
-  window.GeoDevAndroidBridgeV1Init = true;
+  if (window.GeoDevAndroidBridgeV2Init) return;
+  window.GeoDevAndroidBridgeV2Init = true;
 
-  // كشف العمل داخل تطبيق أندرويد (WebView / APK)
   function isAndroidAppWebView() {
     const ua = (navigator.userAgent || "").toLowerCase();
     const isWv = ua.includes("; wv)") || (ua.includes("android") && ua.includes("version/"));
@@ -24,7 +23,6 @@
     return isWv || isWrapper;
   }
 
-  // مخزن مؤقت لربط روابط blob: بالملف الفعلي وبياناته
   const blobRegistry = new Map();
   const origCreateObjectURL = URL.createObjectURL.bind(URL);
 
@@ -40,17 +38,7 @@
     return url;
   };
 
-  function blobToBase64(blob) {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result);
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  }
-
-  function getMimeByFilename(filename) {
-    const ext = String(filename || "").split(".").pop().toLowerCase();
+  function getMimeByExt(ext) {
     const map = {
       csv: "text/csv",
       txt: "text/plain",
@@ -69,16 +57,70 @@
       pdf: "application/pdf",
       zip: "application/zip"
     };
-    return map[ext] || "application/octet-stream";
+    return map[ext.toLowerCase()] || "application/octet-stream";
   }
 
-  // نافذة حفظ ومشاركة الملف المتوافقة 100% مع تطبيق الأندرويد
+  function splitFilename(rawFilename) {
+    const clean = String(rawFilename || `GeoDev_${Date.now()}.txt`).trim();
+    const lastDot = clean.lastIndexOf(".");
+    if (lastDot <= 0) {
+      return { baseName: clean, ext: "txt" };
+    }
+    return {
+      baseName: clean.slice(0, lastDot),
+      ext: clean.slice(lastDot + 1).toLowerCase()
+    };
+  }
+
+  function sanitizeBaseName(name, fallback) {
+    const cleaned = String(name || "")
+      .trim()
+      .replace(/[\\/:*?"<>|]+/g, "_")
+      .replace(/\s+/g, "_");
+    return cleaned || fallback;
+  }
+
+  // رفع مؤقت عبر خدمة نقل ملفات HTTP لتوليد رابط تنزيل حقيقي يقبله Android DownloadManager
+  async function uploadToTempHttpDownload(blob, finalFilename) {
+    const formData = new FormData();
+    formData.append("file", blob, finalFilename);
+
+    // المحاولة الأولى: tmpfiles.org (يعطي رابط تنزيل مباشر حقيقي)
+    try {
+      const res = await fetch("https://tmpfiles.org/api/v1/upload", {
+        method: "POST",
+        body: formData
+      });
+      if (res.ok) {
+        const json = await res.json();
+        const pageUrl = json?.data?.url;
+        if (pageUrl) {
+          // تحويل رابط العرض إلى رابط تنزيل مباشر
+          return pageUrl.replace("https://tmpfiles.org/", "https://tmpfiles.org/dl/");
+        }
+      }
+    } catch (_) {}
+
+    // المحاولة الثانية: file.io
+    try {
+      const res2 = await fetch("https://file.io/?expires=1d", {
+        method: "POST",
+        body: formData
+      });
+      if (res2.ok) {
+        const json2 = await res2.json();
+        if (json2?.link) return json2.link;
+      }
+    } catch (_) {}
+
+    return null;
+  }
+
+  // نافذة تعديل اسم الملف + التنزيل الفعلي والمشاركة في تطبيق الأندرويد
   async function handleWebViewFileExport(blob, rawFilename) {
-    const filename = rawFilename || `GeoDev_Export_${Date.now()}.txt`;
-    const mime = blob.type || getMimeByFilename(filename);
+    const { baseName, ext } = splitFilename(rawFilename);
+    const mime = blob.type || getMimeByExt(ext);
     const typedBlob = new Blob([blob], { type: mime });
-    const fileObj = new File([typedBlob], filename, { type: mime });
-    const dataUrl = await blobToBase64(typedBlob);
 
     const old = document.getElementById("gdAndroidExportModal");
     if (old) old.remove();
@@ -87,37 +129,44 @@
     modal.id = "gdAndroidExportModal";
     modal.style.cssText = `
       position: fixed; inset: 0; z-index: 999999;
-      background: rgba(10, 9, 8, 0.88); backdrop-filter: blur(6px);
+      background: rgba(10, 9, 8, 0.90); backdrop-filter: blur(7px);
       display: flex; align-items: center; justify-content: center;
       padding: 16px; direction: rtl; font-family: inherit;
     `;
 
-    const canNativeShare = Boolean(navigator.canShare && navigator.canShare({ files: [fileObj] }));
-
     modal.innerHTML = `
-      <div style="width:100%;max-width:420px;background:#1e1b18;border:2px solid #e09f24;border-radius:18px;padding:18px;color:#f5f5f4;text-align:center;box-shadow:0 24px 60px rgba(0,0,0,0.85);">
-        <div style="display:inline-block;background:rgba(34,197,94,0.16);border:1px solid #22c55e;color:#4ade80;font-size:11.5px;font-weight:900;padding:3px 12px;border-radius:999px;margin-bottom:8px;">
-          الملف جاهز للحفظ والمشاركة
+      <div style="width:100%;max-width:430px;background:#1e1b18;border:2px solid #e09f24;border-radius:18px;padding:18px;color:#f5f5f4;text-align:right;box-shadow:0 24px 60px rgba(0,0,0,0.85);">
+        <div style="text-align:center;margin-bottom:10px;">
+          <span style="display:inline-block;background:rgba(34,197,94,0.16);border:1px solid #22c55e;color:#4ade80;font-size:11.5px;font-weight:900;padding:3px 12px;border-radius:999px;">
+            تجهيز الملف للحفظ والتنزيل
+          </span>
         </div>
-        <h3 style="margin:0 0 6px;font-size:16px;font-weight:900;color:#fbbf24;word-break:break-all;direction:ltr;">
-          ${filename}
-        </h3>
-        <p style="margin:0 0 14px;font-size:12.5px;color:#d6d3d1;line-height:1.6;">
-          اختر طريقة الحفظ المناسبة لتطبيق الأندرويد:
-        </p>
+
+        <label style="display:block;font-size:12.5px;font-weight:900;color:#fbbf24;margin-bottom:6px;">
+          اسم الملف (يمكنك تعديل الاسم مع بقاء الصيغة ثابتة):
+        </label>
+
+        <div style="display:flex;align-items:stretch;direction:ltr;border:1.5px solid #e09f24;border-radius:11px;overflow:hidden;background:#141210;margin-bottom:12px;">
+          <input type="text" id="gdCustomFileBaseInput" value="${baseName}"
+            placeholder="Area_1"
+            style="flex:1;min-width:0;border:0;background:transparent;color:#ffffff;padding:11px 12px;font-size:14px;font-weight:800;font-family:monospace;outline:none;margin:0;">
+          <span style="display:flex;align-items:center;padding:0 13px;background:#292524;color:#fbbf24;font-weight:900;font-size:14px;font-family:monospace;border-left:1px solid #44403c;user-select:none;">
+            .${ext}
+          </span>
+        </div>
+
+        <div id="gdAndroidDownloadStatus" style="display:none;margin-bottom:10px;padding:8px 10px;border-radius:9px;background:rgba(56,189,248,0.14);border:1px solid #38bdf8;color:#38bdf8;font-size:12px;font-weight:800;text-align:center;"></div>
 
         <div style="display:flex;flex-direction:column;gap:9px;">
-          ${canNativeShare ? `
-            <button type="button" id="gdNativeShareFileBtn"
-              style="width:100%;padding:13px;border-radius:11px;border:0;background:linear-gradient(135deg,#22c55e,#15803d);color:#fff;font-size:14px;font-weight:900;cursor:pointer;font-family:inherit;">
-              حفظ في الهاتف أو مشاركة (واتساب / Drive / مدير الملفات)
-            </button>
-          ` : ""}
-
-          <a id="gdDataUrlDownloadBtn" href="${dataUrl}" download="${filename}"
-            style="display:block;width:100%;box-sizing:border-box;padding:12px;border-radius:11px;background:linear-gradient(135deg,#e09f24,#b45309);color:#141210;font-size:13.5px;font-weight:900;text-decoration:none;">
+          <button type="button" id="gdRealHttpDownloadBtn"
+            style="width:100%;padding:13px;border-radius:11px;border:0;background:linear-gradient(135deg,#e09f24,#b45309);color:#141210;font-size:14px;font-weight:900;cursor:pointer;font-family:inherit;">
             تنزيل مباشر إلى مجلد Downloads
-          </a>
+          </button>
+
+          <button type="button" id="gdNativeShareFileBtn"
+            style="width:100%;padding:12px;border-radius:11px;border:0;background:linear-gradient(135deg,#22c55e,#15803d);color:#ffffff;font-size:13.5px;font-weight:900;cursor:pointer;font-family:inherit;">
+            حفظ في الهاتف أو مشاركة (واتساب / Drive / الملفات)
+          </button>
 
           <button type="button" id="gdCopyFileContentBtn"
             style="width:100%;padding:10px;border-radius:10px;border:1px solid #38bdf8;background:#0f172a;color:#38bdf8;font-size:12.5px;font-weight:800;cursor:pointer;font-family:inherit;">
@@ -134,26 +183,78 @@
 
     document.body.appendChild(modal);
 
-    const shareBtn = document.getElementById("gdNativeShareFileBtn");
-    if (shareBtn) {
-      shareBtn.onclick = async () => {
-        try {
+    const nameInput = document.getElementById("gdCustomFileBaseInput");
+    const statusBox = document.getElementById("gdAndroidDownloadStatus");
+
+    const getFinalFilename = () => {
+      const safeBase = sanitizeBaseName(nameInput.value, baseName);
+      return `${safeBase}.${ext}`;
+    };
+
+    // 1. زر التنزيل المباشر عبر رابط HTTP حقيقي (يعمل في Android WebView و DownloadManager)
+    document.getElementById("gdRealHttpDownloadBtn").onclick = async function () {
+      const finalName = getFinalFilename();
+      this.disabled = true;
+      this.textContent = "جاري تجهيز رابط التنزيل المباشر...";
+      statusBox.style.display = "block";
+      statusBox.textContent = `جاري تحضير الملف (${finalName}) للتنزيل...`;
+
+      try {
+        const directUrl = await uploadToTempHttpDownload(typedBlob, finalName);
+        if (directUrl) {
+          statusBox.style.borderColor = "#22c55e";
+          statusBox.style.color = "#4ade80";
+          statusBox.innerHTML = `بدأ تنزيل <b>${finalName}</b> — إذا لم يبدأ تلقائياً <a href="${directUrl}" target="_blank" rel="noopener" style="color:#fbbf24;text-decoration:underline;">اضغط هنا للتحميل</a>`;
+
+          // تشغيل التنزيل عبر رابط HTTPS حقيقي يتعرف عليه نظام الأندرويد فوراً
+          const a = document.createElement("a");
+          a.href = directUrl;
+          a.download = finalName;
+          a.target = "_blank";
+          a.rel = "noopener";
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        } else {
+          statusBox.style.borderColor = "#f59e0b";
+          statusBox.style.color = "#fbbf24";
+          statusBox.textContent = "تعذر الاتصال بخادم التنزيل، استخدم زر «حفظ في الهاتف أو مشاركة» بالأسفل.";
+        }
+      } catch (_) {
+        statusBox.textContent = "استخدم زر «حفظ في الهاتف أو مشاركة» بالأسفل لحفظ الملف مباشرة.";
+      } finally {
+        this.disabled = false;
+        this.textContent = "تنزيل مباشر إلى مجلد Downloads";
+      }
+    };
+
+    // 2. زر المشاركة والحفظ في الهاتف (Android Share Sheet)
+    document.getElementById("gdNativeShareFileBtn").onclick = async () => {
+      const finalName = getFinalFilename();
+      const fileObj = new File([typedBlob], finalName, { type: mime });
+      try {
+        if (navigator.canShare && navigator.canShare({ files: [fileObj] })) {
           await navigator.share({
             files: [fileObj],
-            title: filename,
-            text: "ملف مساحي مُصدّر من منصة GeoDev Studio Pro"
+            title: finalName,
+            text: `ملف ${finalName} من منصة GeoDev Studio Pro`
           });
-        } catch (_) {}
-      };
-    }
+          return;
+        }
+      } catch (_) {}
 
+      // بديل تلقائي إذا لم يدعم WebView مشاركة الملفات
+      document.getElementById("gdRealHttpDownloadBtn").click();
+    };
+
+    // 3. نسخ المحتوى النصي
     document.getElementById("gdCopyFileContentBtn").onclick = async () => {
       try {
         const txt = await typedBlob.text();
         await navigator.clipboard.writeText(txt);
         if (typeof toast === "function") toast("تم نسخ محتوى الملف بالكامل إلى الحافظة", "success");
       } catch (_) {
-        if (typeof toast === "function") toast("هذا الملف ثنائي (Excel/ZIP)، استخدم زر الحفظ أو المشاركة", "warn");
+        if (typeof toast === "function") toast("هذا الملف ثنائي (Excel/ZIP)، استخدم زر التنزيل المباشر", "warn");
       }
     };
 
@@ -229,38 +330,6 @@
     header.appendChild(btn);
   }
 
-  // تفعيل سحب الشاشة لأسفل للتحديث (Pull-to-Refresh)
-  function enablePullToRefresh() {
-    let startY = 0;
-    let pulling = false;
-
-    window.addEventListener(
-      "touchstart",
-      e => {
-        if (window.scrollY <= 2 && e.touches.length === 1) {
-          startY = e.touches[0].clientY;
-          pulling = true;
-        }
-      },
-      { passive: true }
-    );
-
-    window.addEventListener(
-      "touchend",
-      e => {
-        if (!pulling) return;
-        pulling = false;
-        const endY = e.changedTouches[0]?.clientY || 0;
-        if (endY - startY > 140 && window.scrollY <= 2) {
-          const refreshBtn = document.getElementById("gdAppForceRefreshBtn");
-          if (refreshBtn) refreshBtn.click();
-          else window.location.reload();
-        }
-      },
-      { passive: true }
-    );
-  }
-
   // معالجة تنزيلات مكتبة SheetJS (XLSX.writeFile) داخل تطبيق الأندرويد
   function patchSheetJSForAndroid() {
     if (!isAndroidAppWebView()) return;
@@ -287,7 +356,6 @@
 
   function init() {
     injectAppRefreshButton();
-    enablePullToRefresh();
     patchSheetJSForAndroid();
   }
 
